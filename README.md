@@ -8,6 +8,8 @@ The main change is ownership: clang-tidy logic formerly embedded in `ParsedAST.c
 
 ## Reading the diagrams
 
+Amber (−) marks lines removed at the shown location; green (+) marks lines added there; gray marks unchanged context. Colors follow the actual git diff. A deletion/addition pair may be a rewrite or reindentation within the same core file. Arrows map the tidy responsibility described by the figure, not every line in its excerpts.
+
 Each figure pairs **before** and **after** source excerpts with highlighted selections and an arrow. These are source-rendered images, not IDE screenshots. Lines are taken verbatim from the two git snapshots; line numbers are original, and gaps are marked. File paths in the images are relative to `clang-tools-extra/clangd/`.
 
 - **Move / adapt:** relocated responsibility, with renaming or lifecycle adjustments.
@@ -24,25 +26,39 @@ Open [the hosted walkthrough](https://arcsinx.github.io/clang-tidy-feature-modul
 | Existing lifecycle point | Module responsibility |
 | --- | --- |
 | Before `BeginSourceFile()` | Read options and apply compiler warning options |
-| [`beforePPCallbacks()`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/beforePPCallbacks()) | Create context/checks; register callbacks and matchers |
-| [`beforeExecute()`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/beforeExecute()) | Install the multiplexer and deferred tidy consumer |
-| [`afterExecute()`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/afterExecute()) | Run matching after tokens are collected and traversal is restricted |
-| [`sawDiagnostic()`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/sawDiagnostic()) | Apply tidy policy; identify tidy diagnostics |
-| [`finalizeDiagnostic()`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/finalizeDiagnostic()) | Clean messages and attach tidy-specific tags |
+| [`beforePPCallbacks()`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/FeatureModule.h#L130) | Create context/checks; register callbacks and matchers |
+| [`beforeExecute()`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/FeatureModule.h#L135) | Install the multiplexer and deferred tidy consumer |
+| [`afterExecute()`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/FeatureModule.h#L140) | Run matching after tokens are collected and traversal is restricted |
+| [`sawDiagnostic()`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/FeatureModule.h#L145) | Apply tidy policy; identify tidy diagnostics |
+| [`finalizeDiagnostic()`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/FeatureModule.h#L149) | Clean messages and attach tidy-specific tags |
 
 `FeatureModule.h` and `Preamble.cpp` are unchanged in this commit. The earlier interface extension is already in the parent. Preamble listeners do not run tidy checks: `beforeBeginSourceFile()` is main-file-only, and the tidy listener skips initialization without those options.
+
+
+## Core code retained by the migration
+
+The following blocks stay in `ParsedAST.cpp`; their line numbers shift because tidy code above them was extracted.
+
+| Retained block | Before | After |
+| --- | --- | --- |
+| Frontend startup and beforeBeginSourceFile dispatch | [L546](https://github.com/ArcsinX/llvm-project/blob/18f9e623e4c891ba31ff817c07197707ac9bc593/clang-tools-extra/clangd/ParsedAST.cpp#L546) | [L371](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/ParsedAST.cpp#L371) |
+| beforeExecute dispatch and Execute() | [L756](https://github.com/ArcsinX/llvm-project/blob/18f9e623e4c891ba31ff817c07197707ac9bc593/clang-tools-extra/clangd/ParsedAST.cpp#L756) | [L486](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/ParsedAST.cpp#L486) |
+| Token finalization and traversal restriction | [L770](https://github.com/ArcsinX/llvm-project/blob/18f9e623e4c891ba31ff817c07197707ac9bc593/clang-tools-extra/clangd/ParsedAST.cpp#L770) | [L500](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/ParsedAST.cpp#L500) |
+| afterExecute dispatch | [L785](https://github.com/ArcsinX/llvm-project/blob/18f9e623e4c891ba31ff817c07197707ac9bc593/clang-tools-extra/clangd/ParsedAST.cpp#L785) | [L509](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/ParsedAST.cpp#L509) |
+
+Only the tidy configuration, check setup, matching and diagnostic policy are extracted. Existing lifecycle dispatch, token collection and generic module forwarding remain in core code.
 
 ## Detailed before / after views
 
 ### 1. Configuration and compiler warning options
 
-**MOVE + ADAPT.** The block before BeginSourceFile becomes beforeBeginSourceFile(). Warning-option handling stays before frontend initialization.
+**MOVE + ADAPT.** Only tidy options and warning handling move into the listener; frontend startup stays in ParsedAST.
 
 ![Configuration and compiler warning options — before and after](assets/01-options.png)
 
 [Scalable image](assets/01-options.svg)
 
-- The hook call already existed in the parent commit; this change supplies a tidy listener.
+- Action, MainInput, BeginSourceFile and the beforeBeginSourceFile hook loop remain unchanged.
 - New adaptation: derive and normalize the filename from CompilerInstance before asking the provider.
 
 ### 2. Tidy-specific helpers and linker dependencies
@@ -80,24 +96,24 @@ Open [the hosted walkthrough](https://arcsinx.github.io/clang-tidy-feature-modul
 
 ### 5. AST matching still runs after token collection
 
-**MOVE + ADAPTER.** The direct matchAST() call is replaced by afterExecute(), which releases a deferred MatchFinder consumer callback.
+**MOVE + ADAPTER.** Direct tidy matching moves to the listener; the existing afterExecute dispatch reaches its deferred consumer.
 
 ![AST matching still runs after token collection — before and after](assets/05-match.png)
 
 [Scalable image](assets/05-match.svg)
 
-- ParsedAST still consumes tokens and restricts traversal before invoking afterExecute().
+- Token finalization, traversal restriction and the afterExecute hook loop remain unchanged in ParsedAST.
 - HandleTranslationUnit records the AST first; run() executes the delegate only after those steps.
 
 ### 6. MultiplexConsumer is new lifecycle glue
 
-**NEW GLUE.** beforeExecute() installs the original consumer alongside the deferred tidy consumer. This is not a literal code move.
+**NEW GLUE.** The new tidy listener uses the existing beforeExecute hook to add the original and deferred tidy consumers.
 
 ![MultiplexConsumer is new lifecycle glue — before and after](assets/06-multiplex.png)
 
 [Scalable image](assets/06-multiplex.svg)
 
-- setASTConsumer() initializes its replacement immediately. The old child was already initialized.
+- The beforeExecute hook loop and Execute() stay unchanged; the listener adds the consumer wrapper.
 - The specialized multiplexer initializes only the new tidy child; matching itself remains deferred.
 
 ### 7. Diagnostic suppression and severity policy
@@ -120,7 +136,7 @@ Open [the hosted walkthrough](https://arcsinx.github.io/clang-tidy-feature-modul
 [Scalable image](assets/08-metadata.svg)
 
 - Compiler diagnostics retain their Clang source and -W name.
-- The generic finalizer dispatch and diagnostic deduplication remain in StoreDiags.
+- Flushing, compiler metadata fallback, generic finalizer dispatch and deduplication stay in StoreDiags.
 
 ### 9. Message cleanup and tidy-specific tags
 
@@ -142,7 +158,7 @@ Open [the hosted walkthrough](https://arcsinx.github.io/clang-tidy-feature-modul
 [Scalable image](assets/10-wiring.svg)
 
 - The module set is constructed before check mode, so both --check and the LSP server receive it.
-- Other registry modules are still loaded. Tidy itself is explicitly constructed, not registry-created.
+- FeatureModules fields and server forwarding already existed; dedicated tidy-provider plumbing changes.
 
 ### 11. Module-owned provider snapshots
 
@@ -190,7 +206,7 @@ Open [the hosted walkthrough](https://arcsinx.github.io/clang-tidy-feature-modul
 
 ### 15. IncludeFixer and orchestration stay in the core
 
-**STAYS IN PLACE.** Removing a surrounding tidy setup block reindents IncludeFixer code; it does not move IncludeFixer into the module.
+**STAYS IN PLACE.** IncludeFixer stays in ParsedAST; colored lines show reindentation and rewrites within that same file.
 
 ![IncludeFixer and orchestration stay in the core — before and after](assets/15-stays.png)
 
