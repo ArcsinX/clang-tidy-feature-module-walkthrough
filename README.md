@@ -1,6 +1,8 @@
 # Moving clang-tidy into a FeatureModule
 
-A visual walkthrough of commit [`c109083b09c6`](https://github.com/ArcsinX/llvm-project/commit/c109083b09c60bccd433568e4d47db9e6bc040d1) (`Moved clang-tidy into feature module`), compared with its parent [`18f9e623e4c8`](https://github.com/ArcsinX/llvm-project/tree/18f9e623e4c891ba31ff817c07197707ac9bc593).
+A visual walkthrough of squashed commit `0596766e26dd4a008c6f4b0be463de409af984ea` (`Moved clang-tidy into feature module`), compared with its parent [`18f9e623e4c8`](https://github.com/ArcsinX/llvm-project/tree/18f9e623e4c891ba31ff817c07197707ac9bc593).
+
+The squashed commit is local. GitHub source links use the already-published [`298d0d849f94`](https://github.com/ArcsinX/llvm-project/commit/298d0d849f94bc16a08f6c4190093edba45e5c12) snapshot, which has exactly the same tree (`16bbf39c570b41a4315c7d0699e34fdd46daf595`). [View the combined change on GitHub](https://github.com/ArcsinX/llvm-project/compare/18f9e623e4c891ba31ff817c07197707ac9bc593...298d0d849f94bc16a08f6c4190093edba45e5c12).
 
 The main change is ownership: clang-tidy logic formerly embedded in `ParsedAST.cpp` and `Diagnostics.cpp` is owned by `ClangTidyFeatureModule` and its per-build `TidyASTListener`. The core still controls the frontend lifecycle.
 
@@ -26,11 +28,11 @@ Open [the hosted walkthrough](https://arcsinx.github.io/clang-tidy-feature-modul
 | Existing lifecycle point | Module responsibility |
 | --- | --- |
 | Before `BeginSourceFile()` | Read options and apply compiler warning options |
-| [`beforePPCallbacks()`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/FeatureModule.h#L130) | Create context/checks; register callbacks and matchers |
-| [`beforeExecute()`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/FeatureModule.h#L135) | Install the multiplexer and deferred tidy consumer |
-| [`afterExecute()`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/FeatureModule.h#L140) | Run matching after tokens are collected and traversal is restricted |
-| [`sawDiagnostic()`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/FeatureModule.h#L145) | Apply tidy policy; identify tidy diagnostics |
-| [`finalizeDiagnostic()`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/FeatureModule.h#L149) | Clean messages and attach tidy-specific tags |
+| [`beforePPCallbacks()`](https://github.com/ArcsinX/llvm-project/blob/298d0d849f94bc16a08f6c4190093edba45e5c12/clang-tools-extra/clangd/FeatureModule.h#L130) | Create context/checks; register callbacks and matchers |
+| [`beforeExecute()`](https://github.com/ArcsinX/llvm-project/blob/298d0d849f94bc16a08f6c4190093edba45e5c12/clang-tools-extra/clangd/FeatureModule.h#L135) | Install the multiplexer and deferred tidy consumer |
+| [`afterExecute()`](https://github.com/ArcsinX/llvm-project/blob/298d0d849f94bc16a08f6c4190093edba45e5c12/clang-tools-extra/clangd/FeatureModule.h#L140) | Run matching after tokens are collected and traversal is restricted |
+| [`sawDiagnostic()`](https://github.com/ArcsinX/llvm-project/blob/298d0d849f94bc16a08f6c4190093edba45e5c12/clang-tools-extra/clangd/FeatureModule.h#L145) | Apply tidy policy; identify tidy diagnostics |
+| [`finalizeDiagnostic()`](https://github.com/ArcsinX/llvm-project/blob/298d0d849f94bc16a08f6c4190093edba45e5c12/clang-tools-extra/clangd/FeatureModule.h#L149) | Clean messages and attach tidy-specific tags |
 
 `FeatureModule.h` and `Preamble.cpp` are unchanged in this commit. The earlier interface extension is already in the parent. Preamble listeners do not run tidy checks: `beforeBeginSourceFile()` is main-file-only, and the tidy listener skips initialization without those options.
 
@@ -41,10 +43,10 @@ The following blocks stay in `ParsedAST.cpp`; their line numbers shift because t
 
 | Retained block | Before | After |
 | --- | --- | --- |
-| Frontend startup and beforeBeginSourceFile dispatch | [L546](https://github.com/ArcsinX/llvm-project/blob/18f9e623e4c891ba31ff817c07197707ac9bc593/clang-tools-extra/clangd/ParsedAST.cpp#L546) | [L371](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/ParsedAST.cpp#L371) |
-| beforeExecute dispatch and Execute() | [L756](https://github.com/ArcsinX/llvm-project/blob/18f9e623e4c891ba31ff817c07197707ac9bc593/clang-tools-extra/clangd/ParsedAST.cpp#L756) | [L486](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/ParsedAST.cpp#L486) |
-| Token finalization and traversal restriction | [L770](https://github.com/ArcsinX/llvm-project/blob/18f9e623e4c891ba31ff817c07197707ac9bc593/clang-tools-extra/clangd/ParsedAST.cpp#L770) | [L500](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/ParsedAST.cpp#L500) |
-| afterExecute dispatch | [L785](https://github.com/ArcsinX/llvm-project/blob/18f9e623e4c891ba31ff817c07197707ac9bc593/clang-tools-extra/clangd/ParsedAST.cpp#L785) | [L509](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/ParsedAST.cpp#L509) |
+| Frontend startup and beforeBeginSourceFile dispatch | [L546](https://github.com/ArcsinX/llvm-project/blob/18f9e623e4c891ba31ff817c07197707ac9bc593/clang-tools-extra/clangd/ParsedAST.cpp#L546) | [L371](https://github.com/ArcsinX/llvm-project/blob/298d0d849f94bc16a08f6c4190093edba45e5c12/clang-tools-extra/clangd/ParsedAST.cpp#L371) |
+| beforeExecute dispatch and Execute() | [L756](https://github.com/ArcsinX/llvm-project/blob/18f9e623e4c891ba31ff817c07197707ac9bc593/clang-tools-extra/clangd/ParsedAST.cpp#L756) | [L486](https://github.com/ArcsinX/llvm-project/blob/298d0d849f94bc16a08f6c4190093edba45e5c12/clang-tools-extra/clangd/ParsedAST.cpp#L486) |
+| Token finalization and traversal restriction | [L770](https://github.com/ArcsinX/llvm-project/blob/18f9e623e4c891ba31ff817c07197707ac9bc593/clang-tools-extra/clangd/ParsedAST.cpp#L770) | [L500](https://github.com/ArcsinX/llvm-project/blob/298d0d849f94bc16a08f6c4190093edba45e5c12/clang-tools-extra/clangd/ParsedAST.cpp#L500) |
+| afterExecute dispatch | [L785](https://github.com/ArcsinX/llvm-project/blob/18f9e623e4c891ba31ff817c07197707ac9bc593/clang-tools-extra/clangd/ParsedAST.cpp#L785) | [L509](https://github.com/ArcsinX/llvm-project/blob/298d0d849f94bc16a08f6c4190093edba45e5c12/clang-tools-extra/clangd/ParsedAST.cpp#L509) |
 
 Only the tidy configuration, check setup, matching and diagnostic policy are extracted. Existing lifecycle dispatch, token collection and generic module forwarding remain in core code.
 
@@ -217,14 +219,25 @@ Only the tidy configuration, check setup, matching and diagnostic policy are ext
 
 ### 16. Build integration and focused regression additions
 
-**NEW SUPPORT.** CMake compiles the new module. Three added tests protect compiler-only tidy configuration and the two lifecycle regressions.
+**NEW SUPPORT.** CMake compiles the module. Five regression tests cover tidy policy, lifecycle timing, input paths and provider swaps.
 
 ![Build integration and focused regression additions — before and after](assets/16-build-tests.png)
 
 [Scalable image](assets/16-build-tests.svg)
 
 - Existing tidy diagnostics, token-buffer and preamble replay tests are reused rather than duplicated.
-- These additions are new tests/build wiring, not moved production code.
+- The relative-input and provider-swap tests are shown in full in figure 17.
+
+### 17. Relative inputs and temporary provider overrides
+
+**NEW TESTS.** Two module-specific regression tests cover filename resolution at the new listener boundary and temporary provider restoration.
+
+![Relative inputs and temporary provider overrides — new regression tests](assets/17-paths-provider.png)
+
+[Scalable image](assets/17-paths-provider.svg)
+
+- ClangTidyRelativeInput supplies a relative frontend input from a separate compilation directory, verifies the absolute filename with `.` removed, and runs the check selected by a real `.clang-tidy` file.
+- ClangTidyTemporaryProvider disables checks through swapProvider(), then swaps back and verifies that the original modernize-use-nullptr diagnostic returns.
 
 ## Coverage of all changed files
 
@@ -232,23 +245,23 @@ The figures group related changes; they are not a screenshot of every diff hunk.
 
 | File (under clang-tools-extra/clangd/) | Change | Figure(s) |
 | --- | --- | --- |
-| [`CMakeLists.txt`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/CMakeLists.txt) | Compile the new module | 16 |
-| [`ClangTidyFeatureModule.cpp`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/ClangTidyFeatureModule.cpp) | Relocated helpers/check lifecycle/diagnostic policy, plus adapters and provider snapshots | 1–12 |
-| [`ClangTidyFeatureModule.h`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/ClangTidyFeatureModule.h) | New explicit module API and provider ownership | 11 |
-| [`ClangdServer.cpp`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/ClangdServer.cpp) | Remove dedicated provider forwarding; retain generic module forwarding | 10 |
-| [`ClangdServer.h`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/ClangdServer.h) | Remove provider fields from options and server state | 10–11 |
-| [`Compiler.h`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/Compiler.h) | Remove tidy-specific ParseInputs field/include | 10–11 |
-| [`Diagnostics.cpp`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/Diagnostics.cpp) | Move tidy metadata/cleanup/tags; preserve module-supplied metadata | 8–9 |
-| [`Diagnostics.h`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/Diagnostics.h) | Remove ClangTidyContext dependency from take() | 8 |
-| [`ParsedAST.cpp`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/ParsedAST.cpp) | Extract tidy logic; keep frontend orchestration and IncludeFixer | 1–7, 15 |
-| [`tool/Check.cpp`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/tool/Check.cpp) | Forward modules and swap the tidy provider during timing | 10, 12 |
-| [`tool/ClangdMain.cpp`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/tool/ClangdMain.cpp) | Create the explicit tidy module before check/LSP dispatch | 10 |
-| [`unittests/ClangdLSPServerTests.cpp`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/unittests/ClangdLSPServerTests.cpp) | Two LSP tests add the tidy module to the fixture's set | 14 |
-| [`unittests/ClangdTests.cpp`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/unittests/ClangdTests.cpp) | Server test installs a tidy module | 14 |
-| [`unittests/DiagnosticsTests.cpp`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/unittests/DiagnosticsTests.cpp) | Add compiler-warning-only tidy configuration regression | 16 |
-| [`unittests/FeatureModulesTests.cpp`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/unittests/FeatureModulesTests.cpp) | Add warning-timing and consumer-initialization regressions | 16 |
-| [`unittests/TestTU.cpp`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/unittests/TestTU.cpp) | Build-only local tidy module; direct inputs use explicit modules | 13 |
-| [`unittests/TestTU.h`](https://github.com/ArcsinX/llvm-project/blob/c109083b09c60bccd433568e4d47db9e6bc040d1/clang-tools-extra/clangd/unittests/TestTU.h) | Document the build-only convenience and mutually exclusive setup | 13 |
+| [`CMakeLists.txt`](https://github.com/ArcsinX/llvm-project/blob/298d0d849f94bc16a08f6c4190093edba45e5c12/clang-tools-extra/clangd/CMakeLists.txt) | Compile the new module | 16 |
+| [`ClangTidyFeatureModule.cpp`](https://github.com/ArcsinX/llvm-project/blob/298d0d849f94bc16a08f6c4190093edba45e5c12/clang-tools-extra/clangd/ClangTidyFeatureModule.cpp) | Relocated helpers/check lifecycle/diagnostic policy, plus adapters and provider snapshots | 1–12 |
+| [`ClangTidyFeatureModule.h`](https://github.com/ArcsinX/llvm-project/blob/298d0d849f94bc16a08f6c4190093edba45e5c12/clang-tools-extra/clangd/ClangTidyFeatureModule.h) | New explicit module API and provider ownership | 11 |
+| [`ClangdServer.cpp`](https://github.com/ArcsinX/llvm-project/blob/298d0d849f94bc16a08f6c4190093edba45e5c12/clang-tools-extra/clangd/ClangdServer.cpp) | Remove dedicated provider forwarding; retain generic module forwarding | 10 |
+| [`ClangdServer.h`](https://github.com/ArcsinX/llvm-project/blob/298d0d849f94bc16a08f6c4190093edba45e5c12/clang-tools-extra/clangd/ClangdServer.h) | Remove provider fields from options and server state | 10–11 |
+| [`Compiler.h`](https://github.com/ArcsinX/llvm-project/blob/298d0d849f94bc16a08f6c4190093edba45e5c12/clang-tools-extra/clangd/Compiler.h) | Remove tidy-specific ParseInputs field/include | 10–11 |
+| [`Diagnostics.cpp`](https://github.com/ArcsinX/llvm-project/blob/298d0d849f94bc16a08f6c4190093edba45e5c12/clang-tools-extra/clangd/Diagnostics.cpp) | Move tidy metadata/cleanup/tags; preserve module-supplied metadata | 8–9 |
+| [`Diagnostics.h`](https://github.com/ArcsinX/llvm-project/blob/298d0d849f94bc16a08f6c4190093edba45e5c12/clang-tools-extra/clangd/Diagnostics.h) | Remove ClangTidyContext dependency from take() | 8 |
+| [`ParsedAST.cpp`](https://github.com/ArcsinX/llvm-project/blob/298d0d849f94bc16a08f6c4190093edba45e5c12/clang-tools-extra/clangd/ParsedAST.cpp) | Extract tidy logic; keep frontend orchestration and IncludeFixer | 1–7, 15 |
+| [`tool/Check.cpp`](https://github.com/ArcsinX/llvm-project/blob/298d0d849f94bc16a08f6c4190093edba45e5c12/clang-tools-extra/clangd/tool/Check.cpp) | Forward modules and swap the tidy provider during timing | 10, 12 |
+| [`tool/ClangdMain.cpp`](https://github.com/ArcsinX/llvm-project/blob/298d0d849f94bc16a08f6c4190093edba45e5c12/clang-tools-extra/clangd/tool/ClangdMain.cpp) | Create the explicit tidy module before check/LSP dispatch | 10 |
+| [`unittests/ClangdLSPServerTests.cpp`](https://github.com/ArcsinX/llvm-project/blob/298d0d849f94bc16a08f6c4190093edba45e5c12/clang-tools-extra/clangd/unittests/ClangdLSPServerTests.cpp) | Two LSP tests add the tidy module to the fixture's set | 14 |
+| [`unittests/ClangdTests.cpp`](https://github.com/ArcsinX/llvm-project/blob/298d0d849f94bc16a08f6c4190093edba45e5c12/clang-tools-extra/clangd/unittests/ClangdTests.cpp) | Server test installs a tidy module | 14 |
+| [`unittests/DiagnosticsTests.cpp`](https://github.com/ArcsinX/llvm-project/blob/298d0d849f94bc16a08f6c4190093edba45e5c12/clang-tools-extra/clangd/unittests/DiagnosticsTests.cpp) | Add compiler-warning-only tidy configuration regression | 16 |
+| [`unittests/FeatureModulesTests.cpp`](https://github.com/ArcsinX/llvm-project/blob/298d0d849f94bc16a08f6c4190093edba45e5c12/clang-tools-extra/clangd/unittests/FeatureModulesTests.cpp) | Add warning-timing, consumer-initialization, relative-input and provider-swap regressions | 16–17 |
+| [`unittests/TestTU.cpp`](https://github.com/ArcsinX/llvm-project/blob/298d0d849f94bc16a08f6c4190093edba45e5c12/clang-tools-extra/clangd/unittests/TestTU.cpp) | Build-only local tidy module; direct inputs use explicit modules | 13 |
+| [`unittests/TestTU.h`](https://github.com/ArcsinX/llvm-project/blob/298d0d849f94bc16a08f6c4190093edba45e5c12/clang-tools-extra/clangd/unittests/TestTU.h) | Document the build-only convenience and mutually exclusive setup | 13 |
 
 ## Sharing
 

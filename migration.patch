@@ -1311,7 +1311,7 @@ index e5ef1a006c8a..62129f6f9162 100644
    // We limit the size of printed code.
    Annotations Source(R"cpp(
 diff --git a/clang-tools-extra/clangd/unittests/FeatureModulesTests.cpp b/clang-tools-extra/clangd/unittests/FeatureModulesTests.cpp
-index d2a74f3d8bdb..686113b68e52 100644
+index d2a74f3d8bdb..db814c0a79d4 100644
 --- a/clang-tools-extra/clangd/unittests/FeatureModulesTests.cpp
 +++ b/clang-tools-extra/clangd/unittests/FeatureModulesTests.cpp
 @@ -7,15 +7,21 @@
@@ -1336,7 +1336,7 @@ index d2a74f3d8bdb..686113b68e52 100644
  #include "clang/Lex/PPCallbacks.h"
  #include "clang/Lex/Preprocessor.h"
  #include "llvm/Support/Error.h"
-@@ -303,6 +309,81 @@ TEST(FeatureModulesTest, FinalizeDiagnostic) {
+@@ -303,6 +309,133 @@ TEST(FeatureModulesTest, FinalizeDiagnostic) {
    EXPECT_EQ(Fixes, 1u);
  }
  
@@ -1381,6 +1381,58 @@ index d2a74f3d8bdb..686113b68e52 100644
 +  Build(false, false);
 +  Build(true, false);
 +  Build(true, true);
++}
++
++TEST(FeatureModulesTest, ClangTidyRelativeInput) {
++  if (!CLANGD_TIDY_CHECKS)
++    GTEST_SKIP() << "Requires clang-tidy checks";
++  MockFS FS;
++  auto TU = TestTU::withCode("int *p = 0;");
++  TU.Filename = "project/src/test.cpp";
++  TU.AdditionalFiles["project/src/.clang-tidy"] =
++      "Checks: '-*,modernize-use-nullptr'";
++  auto Provider = provideClangTidyFiles(FS);
++  FeatureModuleSet Modules;
++  Modules.add(std::make_unique<ClangTidyFeatureModule>(
++      [&](tidy::ClangTidyOptions &Opts, llvm::StringRef Filename) {
++        EXPECT_EQ(Filename, testPath(TU.Filename));
++        Provider(Opts, Filename);
++      }));
++  TU.FeatureModules = &Modules;
++  auto Inputs = TU.inputs(FS);
++  Inputs.CompileCommand.Directory = testPath("project");
++  IgnoreDiagnostics Diags;
++  auto CI = buildCompilerInvocation(Inputs, Diags);
++  ASSERT_TRUE(CI);
++  // CommandMangler normally makes inputs absolute. Direct frontend inputs
++  // must also be normalized relative to the compilation directory.
++  auto Kind = CI->getFrontendOpts().Inputs.front().getKind();
++  CI->getFrontendOpts().Inputs = {FrontendInputFile("src/./test.cpp", Kind)};
++  auto AST = ParsedAST::build(testPath(TU.Filename), Inputs, std::move(CI), {},
++                              nullptr);
++  ASSERT_TRUE(AST);
++  ASSERT_THAT(AST->getDiagnostics(), testing::SizeIs(1));
++  EXPECT_EQ(AST->getDiagnostics().front().Name, "modernize-use-nullptr");
++}
++
++TEST(FeatureModulesTest, ClangTidyTemporaryProvider) {
++  if (!CLANGD_TIDY_CHECKS)
++    GTEST_SKIP() << "Requires clang-tidy checks";
++  FeatureModuleSet Modules;
++  Modules.add(std::make_unique<ClangTidyFeatureModule>(
++      addTidyChecks("modernize-use-nullptr")));
++  auto TU = TestTU::withCode("int *p = 0;");
++  TU.FeatureModules = &Modules;
++  auto *Tidy = Modules.get<ClangTidyFeatureModule>();
++  auto Provider = std::make_shared<const TidyProvider>(addTidyChecks("-*"));
++  // Check-mode timing temporarily overrides tidy's configuration, then
++  // restores the original provider for subsequent builds.
++  Tidy->swapProvider(Provider);
++  EXPECT_THAT(TU.build().getDiagnostics(), testing::IsEmpty());
++  Tidy->swapProvider(Provider);
++  auto AST = TU.build();
++  ASSERT_THAT(AST.getDiagnostics(), testing::SizeIs(1));
++  EXPECT_EQ(AST.getDiagnostics().front().Name, "modernize-use-nullptr");
 +}
 +
 +TEST(FeatureModulesTest, ClangTidyDoesNotReinitializeConsumer) {
