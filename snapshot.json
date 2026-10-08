@@ -6,10 +6,15 @@
   "changedFiles": 19,
   "insertions": 886,
   "deletions": 399,
-  "diagrams": 19,
+  "diagrams": 20,
   "sourceAudit": {
-    "displayedLines": 928,
+    "displayedLines": 1019,
     "incorrectSourceLines": 0,
     "incorrectHighlights": 0
+  },
+  "commentAudit": {
+    "pairedExamples": 5,
+    "wordingPreserved": true,
+    "comparison": "ignores indentation and line wrapping"
   }
 }

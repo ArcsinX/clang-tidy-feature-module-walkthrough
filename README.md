@@ -6,6 +6,8 @@ All source links point directly to the squashed commit. [View the complete chang
 
 The main change is ownership: clang-tidy logic formerly embedded in `ParsedAST.cpp` and `Diagnostics.cpp` is owned by `ClangTidyFeatureModule` and its per-build `TidyASTListener`. The core still controls the frontend lifecycle.
 
+Original explanatory comments and existing FIXMEs move together with the code. Their wording is retained; indentation and line wrapping may change. New comments explain the added adapters and wiring. [Figure 19](#19-code-moves-together-with-its-original-comments) shows paired examples.
+
 ![Overview of the code migration](assets/00-overview.png)
 
 ## Reading the diagrams
@@ -44,9 +46,9 @@ The following blocks stay in `ParsedAST.cpp`; their line numbers shift because t
 | Retained block | Before | After |
 | --- | --- | --- |
 | Frontend startup and beforeBeginSourceFile dispatch | [L546](https://github.com/ArcsinX/llvm-project/blob/18f9e623e4c891ba31ff817c07197707ac9bc593/clang-tools-extra/clangd/ParsedAST.cpp#L546) | [L371](https://github.com/ArcsinX/llvm-project/blob/a19cee127beda88aa79dd0e7d18eb395a6eb4da7/clang-tools-extra/clangd/ParsedAST.cpp#L371) |
-| beforeExecute dispatch and Execute() | [L756](https://github.com/ArcsinX/llvm-project/blob/18f9e623e4c891ba31ff817c07197707ac9bc593/clang-tools-extra/clangd/ParsedAST.cpp#L756) | [L486](https://github.com/ArcsinX/llvm-project/blob/a19cee127beda88aa79dd0e7d18eb395a6eb4da7/clang-tools-extra/clangd/ParsedAST.cpp#L490) |
-| Token finalization and traversal restriction | [L770](https://github.com/ArcsinX/llvm-project/blob/18f9e623e4c891ba31ff817c07197707ac9bc593/clang-tools-extra/clangd/ParsedAST.cpp#L770) | [L500](https://github.com/ArcsinX/llvm-project/blob/a19cee127beda88aa79dd0e7d18eb395a6eb4da7/clang-tools-extra/clangd/ParsedAST.cpp#L504) |
-| afterExecute dispatch | [L785](https://github.com/ArcsinX/llvm-project/blob/18f9e623e4c891ba31ff817c07197707ac9bc593/clang-tools-extra/clangd/ParsedAST.cpp#L785) | [L509](https://github.com/ArcsinX/llvm-project/blob/a19cee127beda88aa79dd0e7d18eb395a6eb4da7/clang-tools-extra/clangd/ParsedAST.cpp#L513) |
+| beforeExecute dispatch and Execute() | [L756](https://github.com/ArcsinX/llvm-project/blob/18f9e623e4c891ba31ff817c07197707ac9bc593/clang-tools-extra/clangd/ParsedAST.cpp#L756) | [L490](https://github.com/ArcsinX/llvm-project/blob/a19cee127beda88aa79dd0e7d18eb395a6eb4da7/clang-tools-extra/clangd/ParsedAST.cpp#L490) |
+| Token finalization and traversal restriction | [L770](https://github.com/ArcsinX/llvm-project/blob/18f9e623e4c891ba31ff817c07197707ac9bc593/clang-tools-extra/clangd/ParsedAST.cpp#L770) | [L504](https://github.com/ArcsinX/llvm-project/blob/a19cee127beda88aa79dd0e7d18eb395a6eb4da7/clang-tools-extra/clangd/ParsedAST.cpp#L504) |
+| afterExecute dispatch | [L785](https://github.com/ArcsinX/llvm-project/blob/18f9e623e4c891ba31ff817c07197707ac9bc593/clang-tools-extra/clangd/ParsedAST.cpp#L785) | [L513](https://github.com/ArcsinX/llvm-project/blob/a19cee127beda88aa79dd0e7d18eb395a6eb4da7/clang-tools-extra/clangd/ParsedAST.cpp#L513) |
 
 Only the tidy configuration, check setup, matching and diagnostic policy are extracted. Existing lifecycle dispatch, token collection and generic module forwarding remain in core code.
 
@@ -72,7 +74,7 @@ Only the tidy configuration, check setup, matching and diagnostic policy are ext
 [Scalable image](assets/02-helpers.svg)
 
 - Selected excerpts represent the helper bodies; the full diff includes every moved line.
-- filterFastTidyChecks becomes filterFastChecks. Comments, local names and control-flow spelling also change.
+- filterFastTidyChecks becomes filterFastChecks; original helper comments and FIXMEs move with the code.
 
 ### 3. Per-build state and ClangTidyContext
 
@@ -250,6 +252,16 @@ Only the tidy configuration, check setup, matching and diagnostic policy are ext
 
 - The callback contract documents the empty file and placeholder range for these errors.
 - GN lists the module source; the lit test verifies timing with ordinary tidy checking disabled.
+
+### 19. Code moves together with its original comments
+
+**CODE + COMMENTS.** Original explanatory comments and existing FIXMEs move together with the code. Their wording is retained; indentation and line wrapping may change. New comments explain the added adapters and wiring.
+
+![Code and its original comments — before and after](assets/19-comments.png)
+
+[Scalable image](assets/19-comments.svg)
+
+The pairs show helper documentation, the warning-options rationale, existing limitations, a FIXME, and diagnostic cleanup. Their comment wording matches after ignoring whitespace and line wrapping.
 
 ## Coverage of all changed files
 
