@@ -1511,31 +1511,3 @@ index e2c2e3f000b6..6c31a10aa963 100644
    StoreDiags Diags;
    auto CI = buildCompilerInvocation(Inputs, Diags);
    assert(CI && "Failed to build compilation invocation.");
-diff --git a/clang-tools-extra/clangd/unittests/TestTU.h b/clang-tools-extra/clangd/unittests/TestTU.h
-index 9346d19e0407..fce8ffa1d77d 100644
---- a/clang-tools-extra/clangd/unittests/TestTU.h
-+++ b/clang-tools-extra/clangd/unittests/TestTU.h
-@@ -17,11 +17,11 @@
- #ifndef LLVM_CLANG_TOOLS_EXTRA_CLANGD_UNITTESTS_TESTTU_H
- #define LLVM_CLANG_TOOLS_EXTRA_CLANGD_UNITTESTS_TESTTU_H
- 
--#include "../TidyProvider.h"
- #include "Compiler.h"
- #include "FeatureModule.h"
- #include "ParsedAST.h"
- #include "TestFS.h"
-+#include "TidyProvider.h"
- #include "index/Index.h"
- #include "llvm/ADT/StringMap.h"
- #include <memory>
-@@ -62,7 +62,10 @@ struct TestTU {
-   // Predefine macros such as __UINTPTR_TYPE__.
-   bool PredefineMacros = false;
- 
-+  // Convenience for build() only; mutually exclusive with FeatureModules.
-+  // Use FeatureModules for inputs() or to combine tidy with other modules.
-   TidyProvider ClangTidyProvider = {};
-+
-   // Index to use when building AST.
-   const SymbolIndex *ExternalIndex = nullptr;
- 
