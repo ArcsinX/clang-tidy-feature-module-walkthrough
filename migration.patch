@@ -615,7 +615,7 @@ index 5e5e23d5b968..95dd6726bd1a 100644
    FeatureModuleSet *FeatureModules = nullptr;
    // Used to build and manage (C++) modules.
 diff --git a/clang-tools-extra/clangd/Diagnostics.cpp b/clang-tools-extra/clangd/Diagnostics.cpp
-index 28351c7cc224..d945789f079c 100644
+index 28351c7cc224..66e2d4c55cfa 100644
 --- a/clang-tools-extra/clangd/Diagnostics.cpp
 +++ b/clang-tools-extra/clangd/Diagnostics.cpp
 @@ -7,7 +7,6 @@
@@ -718,15 +718,6 @@ index 28351c7cc224..d945789f079c 100644
        }
      }
      setTags(Diag);
-@@ -754,6 +732,8 @@ void StoreDiags::HandleDiagnostic(DiagnosticsEngine::Level DiagLevel,
-     // Put it at the start of the main file, for a lack of a better place.
-     LastDiag->Range.start = Position{0, 0};
-     LastDiag->Range.end = Position{0, 0};
-+    if (DiagCB)
-+      DiagCB(Info, *LastDiag);
-     return;
-   }
- 
 diff --git a/clang-tools-extra/clangd/Diagnostics.h b/clang-tools-extra/clangd/Diagnostics.h
 index ae710f351dbf..992709813fba 100644
 --- a/clang-tools-extra/clangd/Diagnostics.h
@@ -751,19 +742,6 @@ index ae710f351dbf..992709813fba 100644
  
    void BeginSourceFile(const LangOptions &Opts,
                         const Preprocessor *PP) override;
-diff --git a/clang-tools-extra/clangd/FeatureModule.h b/clang-tools-extra/clangd/FeatureModule.h
-index c327f39e8a1d..62b207c8a38f 100644
---- a/clang-tools-extra/clangd/FeatureModule.h
-+++ b/clang-tools-extra/clangd/FeatureModule.h
-@@ -142,6 +142,8 @@ public:
-     /// Called everytime a diagnostic is encountered. Modules can use this
-     /// modify the final diagnostic, or store some information to surface code
-     /// actions later on.
-+    /// Retained errors without source locations are also reported, with an
-+    /// empty File and a zero-length Range at (0, 0).
-     virtual void sawDiagnostic(const clang::Diagnostic &, clangd::Diag &) {}
- 
-     /// Called after a diagnostic is fully assembled, including notes and
 diff --git a/clang-tools-extra/clangd/ParsedAST.cpp b/clang-tools-extra/clangd/ParsedAST.cpp
 index 434138bcdfa5..52db921f660a 100644
 --- a/clang-tools-extra/clangd/ParsedAST.cpp
@@ -1415,62 +1393,10 @@ index 9ea7c3e02411..0b3b3485f2a7 100644
    const char *SourceContents = R"cpp(
      struct Foo { Foo(); Foo(Foo&); Foo(Foo&&); };
 diff --git a/clang-tools-extra/clangd/unittests/DiagnosticsTests.cpp b/clang-tools-extra/clangd/unittests/DiagnosticsTests.cpp
-index e5ef1a006c8a..b6e7fdd878e5 100644
+index e5ef1a006c8a..2fa481ecd9af 100644
 --- a/clang-tools-extra/clangd/unittests/DiagnosticsTests.cpp
 +++ b/clang-tools-extra/clangd/unittests/DiagnosticsTests.cpp
-@@ -6,6 +6,8 @@
- //
- //===----------------------------------------------------------------------===//
- 
-+#include "../clang-tidy/ClangTidyCheck.h"
-+#include "../clang-tidy/ClangTidyModule.h"
- #include "../clang-tidy/ClangTidyOptions.h"
- #include "Annotations.h"
- #include "Config.h"
-@@ -27,6 +29,7 @@
- #include "support/Context.h"
- #include "support/Path.h"
- #include "clang/AST/Decl.h"
-+#include "clang/ASTMatchers/ASTMatchers.h"
- #include "clang/Basic/Diagnostic.h"
- #include "clang/Basic/DiagnosticSema.h"
- #include "clang/Basic/LLVM.h"
-@@ -64,6 +67,34 @@ using ::testing::Pair;
- using ::testing::SizeIs;
- using ::testing::UnorderedElementsAre;
- 
-+class LocationlessErrorCheck : public tidy::ClangTidyCheck {
-+public:
-+  LocationlessErrorCheck(llvm::StringRef Name, tidy::ClangTidyContext *Context)
-+      : ClangTidyCheck(Name, Context) {
-+    if (Options.get("EmitError", false))
-+      configurationDiag("invalid test option", DiagnosticIDs::Error);
-+  }
-+
-+  void registerMatchers(ast_matchers::MatchFinder *Finder) override {
-+    if (Options.get("EmitAfterParsing", false))
-+      Finder->addMatcher(ast_matchers::translationUnitDecl(), this);
-+  }
-+
-+  void onEndOfTranslationUnit() override {
-+    configurationDiag("invalid test option", DiagnosticIDs::Error);
-+  }
-+};
-+
-+class LocationlessErrorModule : public tidy::ClangTidyModule {
-+public:
-+  void addCheckFactories(tidy::ClangTidyCheckFactories &Factories) override {
-+    Factories.registerCheck<LocationlessErrorCheck>("test-locationless-error");
-+  }
-+};
-+static tidy::ClangTidyModuleRegistry::Add<LocationlessErrorModule>
-+    LocationlessErrorRegistration("test-locationless-error-module",
-+                                  "Test location-less tidy errors");
-+
- ::testing::Matcher<const Diag &> withFix(::testing::Matcher<Fix> FixMatcher) {
-   return Field(&Diag::Fixes, ElementsAre(FixMatcher));
- }
-@@ -824,6 +855,55 @@ TEST(DiagnosticTest, ClangTidyEnablesClangWarning) {
+@@ -824,6 +824,23 @@ TEST(DiagnosticTest, ClangTidyEnablesClangWarning) {
    EXPECT_THAT(TU.build().getDiagnostics(), SizeIs(1));
  }
  
@@ -1489,38 +1415,6 @@ index e5ef1a006c8a..b6e7fdd878e5 100644
 +  TU.Code =
 +      "static void foo() {} // NOLINT(clang-diagnostic-unused-function)\n";
 +  EXPECT_THAT(TU.build().getDiagnostics(), ElementsAre(Warning));
-+}
-+
-+TEST(DiagnosticTest, ClangTidyLocationlessError) {
-+  Config Cfg;
-+  Cfg.Diagnostics.ClangTidy.FastCheckFilter = Config::FastCheckPolicy::None;
-+  WithContextValue WithCfg(Config::Key, std::move(Cfg));
-+  auto TU = TestTU::withCode("int foo; // error-ok\n");
-+  auto Error = AllOf(diagName("clang-tidy-config"), diagSource(Diag::ClangTidy),
-+                     diagSeverity(DiagnosticsEngine::Error),
-+                     Field(&clangd::Diag::Message, "invalid test option"));
-+  for (bool AfterParsing : {false, true}) {
-+    SCOPED_TRACE(AfterParsing);
-+    TU.ClangTidyProvider = [AfterParsing](tidy::ClangTidyOptions &Opts,
-+                                          llvm::StringRef) {
-+      Opts.Checks = "-*,test-locationless-error";
-+      Opts.CheckOptions[AfterParsing
-+                            ? "test-locationless-error.EmitAfterParsing"
-+                            : "test-locationless-error.EmitError"] = "true";
-+    };
-+    EXPECT_THAT(TU.build().getDiagnostics(), ElementsAre(Error));
-+
-+    Config SuppressCfg;
-+    SuppressCfg.Diagnostics.ClangTidy.FastCheckFilter =
-+        Config::FastCheckPolicy::None;
-+    SuppressCfg.Diagnostics.Suppress.insert("clang-tidy-config");
-+    WithContextValue Suppress(Config::Key, std::move(SuppressCfg));
-+    // Constructor errors precede suppression, as in the original integration.
-+    if (AfterParsing)
-+      EXPECT_THAT(TU.build().getDiagnostics(), IsEmpty());
-+    else
-+      EXPECT_THAT(TU.build().getDiagnostics(), ElementsAre(Error));
-+  }
 +}
 +
  TEST(DiagnosticTest, LongFixMessages) {
