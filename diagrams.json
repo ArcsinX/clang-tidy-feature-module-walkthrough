@@ -1,0 +1,4734 @@
+[
+  {
+    "id": "00-overview",
+    "title": "Clang-tidy moves behind existing FeatureModule hooks",
+    "desc": "Tidy responsibilities move with their original comments. Core parsing orchestration stays in place; matching remains a direct MatchFinder call.",
+    "before": [],
+    "after": [],
+    "height": 1000
+  },
+  {
+    "id": "01-options",
+    "title": "Configuration and compiler warning options",
+    "desc": "Only tidy options and warning handling move into the listener; frontend startup stays in ParsedAST. Action, MainInput, BeginSourceFile and the beforeBeginSourceFile hook loop remain unchanged. Use clangd's remapped main-file spelling; normalize only a relative fallback before configuration lookup.",
+    "before": [
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/ParsedAST.cpp",
+        "rows": [
+          {
+            "n": 512,
+            "text": "  tidy::ClangTidyOptions ClangTidyOpts;"
+          },
+          {
+            "n": 513,
+            "text": "  {"
+          },
+          {
+            "n": 514,
+            "text": "    trace::Span Tracer(\"ClangTidyOpts\");"
+          },
+          {
+            "n": 515,
+            "text": "    ClangTidyOpts = getTidyOptionsForFile(Inputs.ClangTidyProvider, Filename);"
+          },
+          {
+            "n": 516,
+            "text": "    dlog(\"ClangTidy configuration for file {0}: {1}\", Filename,"
+          },
+          {
+            "n": 517,
+            "text": "         tidy::configurationAsText(ClangTidyOpts));"
+          },
+          {
+            "n": 538,
+            "text": "    TidyDiagnosticGroups TidyGroups(ClangTidyOpts.Checks ? *ClangTidyOpts.Checks"
+          },
+          {
+            "n": 539,
+            "text": "                                                         : llvm::StringRef());"
+          },
+          {
+            "n": 540,
+            "text": "    if (ClangTidyOpts.ExtraArgsBefore)"
+          },
+          {
+            "n": 541,
+            "text": "      applyWarningOptions(*ClangTidyOpts.ExtraArgsBefore, TidyGroups, Diags);"
+          },
+          {
+            "n": 542,
+            "text": "    if (ClangTidyOpts.ExtraArgs)"
+          },
+          {
+            "n": 543,
+            "text": "      applyWarningOptions(*ClangTidyOpts.ExtraArgs, TidyGroups, Diags);"
+          },
+          {
+            "n": 544,
+            "text": "  }"
+          },
+          {
+            "n": 545,
+            "text": ""
+          },
+          {
+            "n": 546,
+            "text": "  auto Action = std::make_unique<ClangdFrontendAction>();"
+          },
+          {
+            "n": 547,
+            "text": "  for (const auto &L : ASTListeners)"
+          },
+          {
+            "n": 548,
+            "text": "    L->beforeBeginSourceFile(*Clang);"
+          },
+          {
+            "n": 549,
+            "text": "  const FrontendInputFile &MainInput = Clang->getFrontendOpts().Inputs[0];"
+          },
+          {
+            "n": 550,
+            "text": "  if (!Action->BeginSourceFile(*Clang, MainInput)) {"
+          }
+        ]
+      }
+    ],
+    "after": [
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/ClangTidyFeatureModule.cpp",
+        "rows": [
+          {
+            "n": 172,
+            "text": "  void beforeBeginSourceFile(CompilerInstance &CI) override {"
+          },
+          {
+            "n": 173,
+            "text": "    // Warning options must precede frontend initialization: module loading in"
+          },
+          {
+            "n": 174,
+            "text": "    // BeginSourceFile() can consult their severity to decide whether to fail."
+          },
+          {
+            "n": 175,
+            "text": "    const auto &Inputs = CI.getFrontendOpts().Inputs;"
+          },
+          {
+            "n": 176,
+            "text": "    if (Inputs.empty() || !Inputs.front().isFile()) {"
+          },
+          {
+            "n": 177,
+            "text": "      elog(\"Cannot configure clang-tidy without a main-file input\");"
+          },
+          {
+            "n": 178,
+            "text": "      return;"
+          },
+          {
+            "n": 179,
+            "text": "    }"
+          },
+          {
+            "n": 180,
+            "text": "    llvm::SmallString<256> Path(Inputs.front().getFile());"
+          },
+          {
+            "n": 181,
+            "text": "    // The remapped buffer carries clangd's original main-file spelling."
+          },
+          {
+            "n": 182,
+            "text": "    for (const auto &Remap :"
+          },
+          {
+            "n": 183,
+            "text": "         llvm::reverse(CI.getPreprocessorOpts().RemappedFileBuffers)) {"
+          },
+          {
+            "n": 184,
+            "text": "      if (Remap.first == Inputs.front().getFile()) {"
+          },
+          {
+            "n": 185,
+            "text": "        Path = Remap.second->getBufferIdentifier();"
+          },
+          {
+            "n": 186,
+            "text": "        break;"
+          },
+          {
+            "n": 187,
+            "text": "      }"
+          },
+          {
+            "n": 188,
+            "text": "    }"
+          },
+          {
+            "n": 189,
+            "text": "    // Providers search parent directories for .clang-tidy and require an"
+          },
+          {
+            "n": 190,
+            "text": "    // absolute path. Respect the compiler's working directory, not clangd's."
+          },
+          {
+            "n": 191,
+            "text": "    if (!llvm::sys::path::is_absolute(Path))"
+          },
+          {
+            "n": 192,
+            "text": "      CI.getFileManager().makeAbsolutePath(Path, /*Canonicalize=*/true);"
+          },
+          {
+            "n": 193,
+            "text": "    if (!llvm::sys::path::is_absolute(Path)) {"
+          },
+          {
+            "n": 194,
+            "text": "      elog(\"Cannot resolve clang-tidy input path: {0}\", Path);"
+          },
+          {
+            "n": 195,
+            "text": "      return;"
+          },
+          {
+            "n": 196,
+            "text": "    }"
+          },
+          {
+            "n": 197,
+            "text": "    Filename = Path.str().str();"
+          },
+          {
+            "n": 198,
+            "text": "    trace::Span Tracer(\"ClangTidyOpts\");"
+          },
+          {
+            "n": 199,
+            "text": "    Options = getTidyOptionsForFile(*Provider, Filename);"
+          },
+          {
+            "n": 221,
+            "text": "    TidyDiagnosticGroups EnabledGroups(Options->Checks ? *Options->Checks"
+          },
+          {
+            "n": 222,
+            "text": "                                                       : llvm::StringRef());"
+          },
+          {
+            "n": 223,
+            "text": "    if (Options->ExtraArgsBefore)"
+          },
+          {
+            "n": 224,
+            "text": "      applyWarningOptions(*Options->ExtraArgsBefore, EnabledGroups,"
+          },
+          {
+            "n": 225,
+            "text": "                          CI.getDiagnostics());"
+          },
+          {
+            "n": 226,
+            "text": "    if (Options->ExtraArgs)"
+          },
+          {
+            "n": 227,
+            "text": "      applyWarningOptions(*Options->ExtraArgs, EnabledGroups,"
+          },
+          {
+            "n": 228,
+            "text": "                          CI.getDiagnostics());"
+          },
+          {
+            "n": 229,
+            "text": "  }"
+          }
+        ]
+      }
+    ],
+    "kind": "MOVE + ADAPT",
+    "notes": [
+      "Frontend startup and beforeBeginSourceFile dispatch remain in ParsedAST.",
+      "The remapped main-file buffer preserves the requested filename for configuration lookup."
+    ],
+    "height": 1377
+  },
+  {
+    "id": "02-helpers",
+    "title": "Tidy-specific helpers and linker dependencies",
+    "desc": "The warning-group parser, warning mapper, fast-check filter and force-linker leave ParsedAST.cpp and live with the module. Selected excerpts represent the helper bodies; the full diff includes every moved line. filterFastTidyChecks becomes filterFastChecks; original helper comments and FIXMEs move with the code.",
+    "before": [
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/ParsedAST.cpp",
+        "rows": [
+          {
+            "n": 79,
+            "text": "// Force the linker to link in Clang-tidy modules."
+          },
+          {
+            "n": 80,
+            "text": "// clangd doesn't support the static analyzer."
+          },
+          {
+            "n": 81,
+            "text": "#if CLANGD_TIDY_CHECKS"
+          },
+          {
+            "n": 82,
+            "text": "#define CLANG_TIDY_DISABLE_STATIC_ANALYZER_CHECKS"
+          },
+          {
+            "n": 83,
+            "text": "#include \"../clang-tidy/ClangTidyForceLinker.h\""
+          },
+          {
+            "n": 84,
+            "text": "#endif"
+          },
+          {
+            "n": 304,
+            "text": "  TidyDiagnosticGroups(llvm::StringRef Checks) {"
+          },
+          {
+            "n": 305,
+            "text": "    constexpr llvm::StringLiteral CDPrefix = \"clang-diagnostic-\";"
+          },
+          {
+            "n": 306,
+            "text": ""
+          },
+          {
+            "n": 307,
+            "text": "    llvm::StringRef Check;"
+          },
+          {
+            "n": 308,
+            "text": "    while (!Checks.empty()) {"
+          },
+          {
+            "n": 309,
+            "text": "      std::tie(Check, Checks) = Checks.split(',');"
+          },
+          {
+            "n": 310,
+            "text": "      Check = Check.trim();"
+          },
+          {
+            "n": 367,
+            "text": "    bool NeedsWerrorExclusion = false;"
+          },
+          {
+            "n": 368,
+            "text": "    for (diag::kind ID : Members) {"
+          },
+          {
+            "n": 369,
+            "text": "      if (Enable) {"
+          },
+          {
+            "n": 370,
+            "text": "        if (Diags.getDiagnosticLevel(ID, SourceLocation()) <"
+          },
+          {
+            "n": 371,
+            "text": "            DiagnosticsEngine::Warning) {"
+          },
+          {
+            "n": 372,
+            "text": "          auto Group = Diags.getDiagnosticIDs()->getGroupForDiag(ID);"
+          },
+          {
+            "n": 373,
+            "text": "          if (!Group || !EnabledGroups(*Group))"
+          },
+          {
+            "n": 374,
+            "text": "            continue;"
+          },
+          {
+            "n": 375,
+            "text": "          Diags.setSeverity(ID, diag::Severity::Warning, SourceLocation());"
+          },
+          {
+            "n": 376,
+            "text": "          if (Diags.getWarningsAsErrors())"
+          },
+          {
+            "n": 377,
+            "text": "            NeedsWerrorExclusion = true;"
+          },
+          {
+            "n": 378,
+            "text": "        }"
+          },
+          {
+            "n": 379,
+            "text": "      } else {"
+          },
+          {
+            "n": 380,
+            "text": "        Diags.setSeverity(ID, diag::Severity::Ignored, SourceLocation());"
+          },
+          {
+            "n": 381,
+            "text": "      }"
+          },
+          {
+            "n": 416,
+            "text": "tidy::ClangTidyCheckFactories"
+          },
+          {
+            "n": 417,
+            "text": "filterFastTidyChecks(const tidy::ClangTidyCheckFactories &All,"
+          },
+          {
+            "n": 418,
+            "text": "                     Config::FastCheckPolicy Policy) {"
+          },
+          {
+            "n": 419,
+            "text": "  if (Policy == Config::FastCheckPolicy::None)"
+          },
+          {
+            "n": 420,
+            "text": "    return All;"
+          },
+          {
+            "n": 421,
+            "text": "  bool AllowUnknown = Policy == Config::FastCheckPolicy::Loose;"
+          },
+          {
+            "n": 422,
+            "text": "  tidy::ClangTidyCheckFactories Fast;"
+          },
+          {
+            "n": 423,
+            "text": "  for (const auto &Factory : All) {"
+          },
+          {
+            "n": 424,
+            "text": "    if (isFastTidyCheck(Factory.getKey()).value_or(AllowUnknown))"
+          },
+          {
+            "n": 425,
+            "text": "      Fast.registerCheckFactory(Factory.first(), Factory.second);"
+          },
+          {
+            "n": 426,
+            "text": "  }"
+          },
+          {
+            "n": 427,
+            "text": "  return Fast;"
+          },
+          {
+            "n": 428,
+            "text": "}"
+          }
+        ]
+      }
+    ],
+    "after": [
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/ClangTidyFeatureModule.cpp",
+        "rows": [
+          {
+            "n": 40,
+            "text": "// Force the linker to link in Clang-tidy modules."
+          },
+          {
+            "n": 41,
+            "text": "// clangd doesn't support the static analyzer."
+          },
+          {
+            "n": 42,
+            "text": "#if CLANGD_TIDY_CHECKS"
+          },
+          {
+            "n": 43,
+            "text": "#define CLANG_TIDY_DISABLE_STATIC_ANALYZER_CHECKS"
+          },
+          {
+            "n": 44,
+            "text": "#include \"../clang-tidy/ClangTidyForceLinker.h\""
+          },
+          {
+            "n": 45,
+            "text": "#endif"
+          },
+          {
+            "n": 73,
+            "text": "  TidyDiagnosticGroups(llvm::StringRef Checks) {"
+          },
+          {
+            "n": 74,
+            "text": "    constexpr llvm::StringLiteral Prefix = \"clang-diagnostic-\";"
+          },
+          {
+            "n": 75,
+            "text": "    llvm::StringRef Check;"
+          },
+          {
+            "n": 76,
+            "text": "    while (!Checks.empty()) {"
+          },
+          {
+            "n": 77,
+            "text": "      std::tie(Check, Checks) = Checks.split(',');"
+          },
+          {
+            "n": 78,
+            "text": "      Check = Check.trim();"
+          },
+          {
+            "n": 79,
+            "text": "      if (Check.empty())"
+          },
+          {
+            "n": 80,
+            "text": "        continue;"
+          },
+          {
+            "n": 81,
+            "text": ""
+          },
+          {
+            "n": 82,
+            "text": "      bool Enable = !Check.consume_front(\"-\");"
+          },
+          {
+            "n": 83,
+            "text": "      bool Glob = Check.consume_back(\"*\");"
+          },
+          {
+            "n": 130,
+            "text": "    bool NeedsWerrorExclusion = false;"
+          },
+          {
+            "n": 131,
+            "text": "    for (diag::kind ID : Members) {"
+          },
+          {
+            "n": 132,
+            "text": "      if (Enable) {"
+          },
+          {
+            "n": 133,
+            "text": "        if (Diags.getDiagnosticLevel(ID, SourceLocation()) >="
+          },
+          {
+            "n": 134,
+            "text": "            DiagnosticsEngine::Warning)"
+          },
+          {
+            "n": 135,
+            "text": "          continue;"
+          },
+          {
+            "n": 136,
+            "text": "        auto DiagGroup = Diags.getDiagnosticIDs()->getGroupForDiag(ID);"
+          },
+          {
+            "n": 137,
+            "text": "        if (!DiagGroup || !EnabledGroups(*DiagGroup))"
+          },
+          {
+            "n": 138,
+            "text": "          continue;"
+          },
+          {
+            "n": 139,
+            "text": "        Diags.setSeverity(ID, diag::Severity::Warning, SourceLocation());"
+          },
+          {
+            "n": 140,
+            "text": "        NeedsWerrorExclusion |= Diags.getWarningsAsErrors();"
+          },
+          {
+            "n": 141,
+            "text": "      } else {"
+          },
+          {
+            "n": 142,
+            "text": "        Diags.setSeverity(ID, diag::Severity::Ignored, SourceLocation());"
+          },
+          {
+            "n": 143,
+            "text": "      }"
+          },
+          {
+            "n": 154,
+            "text": "tidy::ClangTidyCheckFactories"
+          },
+          {
+            "n": 155,
+            "text": "filterFastChecks(const tidy::ClangTidyCheckFactories &All,"
+          },
+          {
+            "n": 156,
+            "text": "                 Config::FastCheckPolicy Policy) {"
+          },
+          {
+            "n": 157,
+            "text": "  if (Policy == Config::FastCheckPolicy::None)"
+          },
+          {
+            "n": 158,
+            "text": "    return All;"
+          },
+          {
+            "n": 159,
+            "text": "  bool AllowUnknown = Policy == Config::FastCheckPolicy::Loose;"
+          },
+          {
+            "n": 160,
+            "text": "  tidy::ClangTidyCheckFactories Fast;"
+          },
+          {
+            "n": 161,
+            "text": "  for (const auto &Factory : All)"
+          },
+          {
+            "n": 162,
+            "text": "    if (isFastTidyCheck(Factory.getKey()).value_or(AllowUnknown))"
+          },
+          {
+            "n": 163,
+            "text": "      Fast.registerCheckFactory(Factory.first(), Factory.second);"
+          },
+          {
+            "n": 164,
+            "text": "  return Fast;"
+          },
+          {
+            "n": 165,
+            "text": "}"
+          }
+        ]
+      }
+    ],
+    "kind": "MOVE + CLEANUP",
+    "notes": [
+      "The warning-group parser, warning mapper, fast-check filter and force-linker leave ParsedAST.cpp and live with the module. Selected excerpts represent the helper bodies; the full diff includes every moved line. filterFastTidyChecks becomes filterFastChecks; original helper comments and FIXMEs move with the code."
+    ],
+    "height": 1553
+  },
+  {
+    "id": "03-context",
+    "title": "Per-build state and ClangTidyContext",
+    "desc": "Stack-local tidy state becomes per-build listener state. Context outlives its checks and MatchFinder; matching is invoked directly after parsing.",
+    "before": [
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/ParsedAST.cpp",
+        "rows": [
+          {
+            "n": 572,
+            "text": "  std::vector<std::unique_ptr<tidy::ClangTidyCheck>> CTChecks;"
+          },
+          {
+            "n": 573,
+            "text": "  ast_matchers::MatchFinder CTFinder;"
+          },
+          {
+            "n": 574,
+            "text": "  std::optional<tidy::ClangTidyContext> CTContext;"
+          },
+          {
+            "n": 589,
+            "text": "    CTContext.emplace(std::make_unique<tidy::DefaultOptionsProvider>("
+          },
+          {
+            "n": 590,
+            "text": "                          tidy::ClangTidyGlobalOptions(), ClangTidyOpts),"
+          },
+          {
+            "n": 591,
+            "text": "                      /*AllowEnablingAnalyzerAlphaCheckers=*/false,"
+          },
+          {
+            "n": 592,
+            "text": "                      /*EnableModuleHeadersParsing=*/false,"
+          },
+          {
+            "n": 593,
+            "text": "                      Cfg.Diagnostics.ClangTidy.ExperimentalCustomChecks);"
+          },
+          {
+            "n": 594,
+            "text": "    // The lifetime of DiagnosticOptions is managed by \\c Clang."
+          },
+          {
+            "n": 595,
+            "text": "    CTContext->setDiagnosticsEngine(nullptr, &Clang->getDiagnostics());"
+          },
+          {
+            "n": 596,
+            "text": "    CTContext->setASTContext(&Clang->getASTContext());"
+          },
+          {
+            "n": 597,
+            "text": "    CTContext->setCurrentFile(Filename);"
+          },
+          {
+            "n": 598,
+            "text": "    CTContext->setSelfContainedDiags(true);"
+          },
+          {
+            "n": 599,
+            "text": "    tidy::ClangTidyCheckFactories CTCheckFactories = *AllCTFactories;"
+          }
+        ]
+      }
+    ],
+    "after": [
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/ClangTidyFeatureModule.cpp",
+        "rows": [
+          {
+            "n": 252,
+            "text": "            tidy::ClangTidyGlobalOptions(), std::move(*Options)),"
+          },
+          {
+            "n": 253,
+            "text": "        /*AllowEnablingAnalyzerAlphaCheckers=*/false,"
+          },
+          {
+            "n": 254,
+            "text": "        /*EnableModuleHeadersParsing=*/false,"
+          },
+          {
+            "n": 255,
+            "text": "        Config::current().Diagnostics.ClangTidy.ExperimentalCustomChecks);"
+          },
+          {
+            "n": 256,
+            "text": "    Options.reset();"
+          },
+          {
+            "n": 257,
+            "text": "    // The lifetime of DiagnosticOptions is managed by \\c Clang."
+          },
+          {
+            "n": 258,
+            "text": "    Context->setDiagnosticsEngine(nullptr, &CI.getDiagnostics());"
+          },
+          {
+            "n": 259,
+            "text": "    Context->setASTContext(&CI.getASTContext());"
+          },
+          {
+            "n": 260,
+            "text": "    Context->setCurrentFile(Filename);"
+          },
+          {
+            "n": 261,
+            "text": "    Context->setSelfContainedDiags(true);"
+          },
+          {
+            "n": 262,
+            "text": "    tidy::ClangTidyCheckFactories Factories = *AllFactories;"
+          },
+          {
+            "n": 263,
+            "text": "#if CLANG_TIDY_ENABLE_QUERY_BASED_CUSTOM_CHECKS"
+          },
+          {
+            "n": 377,
+            "text": "private:"
+          },
+          {
+            "n": 378,
+            "text": "  std::shared_ptr<const TidyProvider> Provider;"
+          },
+          {
+            "n": 379,
+            "text": "  std::string Filename;"
+          },
+          {
+            "n": 380,
+            "text": "  std::optional<tidy::ClangTidyOptions> Options;"
+          },
+          {
+            "n": 381,
+            "text": "  // Destruction order matters: Finder and checks refer to Context."
+          },
+          {
+            "n": 382,
+            "text": "  std::optional<tidy::ClangTidyContext> Context;"
+          },
+          {
+            "n": 383,
+            "text": "  std::vector<std::unique_ptr<tidy::ClangTidyCheck>> Checks;"
+          },
+          {
+            "n": 384,
+            "text": "  ast_matchers::MatchFinder Finder;"
+          }
+        ]
+      }
+    ],
+    "kind": "MOVE + OWNERSHIP",
+    "notes": [
+      "Options move into ClangTidyContext; member order preserves dependent lifetimes.",
+      "Preamble listeners remain inactive. No deferred-consumer state is introduced."
+    ],
+    "height": 979
+  },
+  {
+    "id": "04-checks",
+    "title": "Factories, custom checks and callback registration",
+    "desc": "Check setup moves into beforePPCallbacks(), after BeginSourceFile and before clangd captures callbacks for preamble replay. The registry here is ClangTidyModuleRegistry (check factories), not FeatureModuleRegistry. Custom-check registration, its mutex, fast-check filtering and PP/matcher registration are retained.",
+    "before": [
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/ParsedAST.cpp",
+        "rows": [
+          {
+            "n": 582,
+            "text": "    trace::Span Tracer(\"ClangTidyInit\");"
+          },
+          {
+            "n": 583,
+            "text": "    static const auto *AllCTFactories = [] {"
+          },
+          {
+            "n": 584,
+            "text": "      auto *CTFactories = new tidy::ClangTidyCheckFactories;"
+          },
+          {
+            "n": 585,
+            "text": "      for (const auto &E : tidy::ClangTidyModuleRegistry::entries())"
+          },
+          {
+            "n": 586,
+            "text": "        E.instantiate()->addCheckFactories(*CTFactories);"
+          },
+          {
+            "n": 587,
+            "text": "      return CTFactories;"
+          },
+          {
+            "n": 588,
+            "text": "    }();"
+          },
+          {
+            "n": 600,
+            "text": "#if CLANG_TIDY_ENABLE_QUERY_BASED_CUSTOM_CHECKS"
+          },
+          {
+            "n": 601,
+            "text": "    if (CTContext->canExperimentalCustomChecks() &&"
+          },
+          {
+            "n": 602,
+            "text": "        tidy::custom::RegisterCustomChecks) {"
+          },
+          {
+            "n": 603,
+            "text": "      // RegisterCustomChecks tracks names in process-wide mutable state."
+          },
+          {
+            "n": 604,
+            "text": "      // Serializing its use keeps concurrent AST builds independent."
+          },
+          {
+            "n": 605,
+            "text": "      static std::mutex CustomChecksMu;"
+          },
+          {
+            "n": 606,
+            "text": "      std::lock_guard<std::mutex> Lock(CustomChecksMu);"
+          },
+          {
+            "n": 607,
+            "text": "      tidy::custom::RegisterCustomChecks(CTContext->getOptions(),"
+          },
+          {
+            "n": 608,
+            "text": "                                         CTCheckFactories);"
+          },
+          {
+            "n": 609,
+            "text": "    }"
+          },
+          {
+            "n": 610,
+            "text": "#endif"
+          },
+          {
+            "n": 611,
+            "text": "    tidy::ClangTidyCheckFactories FastFactories = filterFastTidyChecks("
+          },
+          {
+            "n": 612,
+            "text": "        CTCheckFactories, Cfg.Diagnostics.ClangTidy.FastCheckFilter);"
+          },
+          {
+            "n": 613,
+            "text": "    CTChecks = FastFactories.createChecksForLanguage(&*CTContext);"
+          },
+          {
+            "n": 614,
+            "text": "    Preprocessor *PP = &Clang->getPreprocessor();"
+          },
+          {
+            "n": 615,
+            "text": "    for (const auto &Check : CTChecks) {"
+          },
+          {
+            "n": 616,
+            "text": "      Check->registerPPCallbacks(Clang->getSourceManager(), PP, PP);"
+          },
+          {
+            "n": 617,
+            "text": "      Check->registerMatchers(&CTFinder);"
+          },
+          {
+            "n": 618,
+            "text": "    }"
+          }
+        ]
+      }
+    ],
+    "after": [
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/ClangTidyFeatureModule.cpp",
+        "rows": [
+          {
+            "n": 231,
+            "text": "  void beforePPCallbacks(CompilerInstance &CI) override {"
+          },
+          {
+            "n": 232,
+            "text": "    // Preamble builds don't call beforeBeginSourceFile(). Running tidy there"
+          },
+          {
+            "n": 233,
+            "text": "    // would duplicate diagnostics and interfere with PCH generation."
+          },
+          {
+            "n": 234,
+            "text": "    if (!Options)"
+          },
+          {
+            "n": 235,
+            "text": "      return;"
+          },
+          {
+            "n": 245,
+            "text": "      auto *Factories = new tidy::ClangTidyCheckFactories;"
+          },
+          {
+            "n": 246,
+            "text": "      for (const auto &Entry : tidy::ClangTidyModuleRegistry::entries())"
+          },
+          {
+            "n": 247,
+            "text": "        Entry.instantiate()->addCheckFactories(*Factories);"
+          },
+          {
+            "n": 248,
+            "text": "      return Factories;"
+          },
+          {
+            "n": 249,
+            "text": "    }();"
+          },
+          {
+            "n": 250,
+            "text": "    Context.emplace("
+          },
+          {
+            "n": 251,
+            "text": "        std::make_unique<tidy::DefaultOptionsProvider>("
+          },
+          {
+            "n": 264,
+            "text": "    if (Context->canExperimentalCustomChecks() &&"
+          },
+          {
+            "n": 265,
+            "text": "        tidy::custom::RegisterCustomChecks) {"
+          },
+          {
+            "n": 266,
+            "text": "      // RegisterCustomChecks tracks names in process-wide mutable state."
+          },
+          {
+            "n": 267,
+            "text": "      // Serializing its use keeps concurrent AST builds independent."
+          },
+          {
+            "n": 268,
+            "text": "      static std::mutex CustomChecksMu;"
+          },
+          {
+            "n": 269,
+            "text": "      std::lock_guard<std::mutex> Lock(CustomChecksMu);"
+          },
+          {
+            "n": 270,
+            "text": "      tidy::custom::RegisterCustomChecks(Context->getOptions(), Factories);"
+          },
+          {
+            "n": 271,
+            "text": "    }"
+          },
+          {
+            "n": 272,
+            "text": "#endif"
+          },
+          {
+            "n": 273,
+            "text": "    auto FastFactories = filterFastChecks("
+          },
+          {
+            "n": 274,
+            "text": "        Factories, Config::current().Diagnostics.ClangTidy.FastCheckFilter);"
+          },
+          {
+            "n": 275,
+            "text": "    Checks = FastFactories.createChecksForLanguage(&*Context);"
+          },
+          {
+            "n": 276,
+            "text": ""
+          },
+          {
+            "n": 277,
+            "text": "    Preprocessor *PP = &CI.getPreprocessor();"
+          },
+          {
+            "n": 278,
+            "text": "    for (const auto &Check : Checks) {"
+          },
+          {
+            "n": 279,
+            "text": "      Check->registerPPCallbacks(CI.getSourceManager(), PP, PP);"
+          },
+          {
+            "n": 280,
+            "text": "      Check->registerMatchers(&Finder);"
+          },
+          {
+            "n": 281,
+            "text": "    }"
+          }
+        ]
+      }
+    ],
+    "kind": "MOVE + ADAPT",
+    "notes": [
+      "Check factories still come from ClangTidyModuleRegistry, not FeatureModuleRegistry.",
+      "Custom-check registration, synchronization, fast filtering and callback registration are retained."
+    ],
+    "height": 1245
+  },
+  {
+    "id": "05-match",
+    "title": "AST matching is a direct afterExecute call",
+    "desc": "The same MatchFinder call moves from ParsedAST into afterExecute(). Tokens are collected and traversal scope is restricted first, as before.",
+    "before": [
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/ParsedAST.cpp",
+        "rows": [
+          {
+            "n": 770,
+            "text": "  // We have to consume the tokens before running clang-tidy to avoid collecting"
+          },
+          {
+            "n": 771,
+            "text": "  // tokens from running the preprocessor inside the checks (only"
+          },
+          {
+            "n": 772,
+            "text": "  // modernize-use-trailing-return-type does that today)."
+          },
+          {
+            "n": 773,
+            "text": "  syntax::TokenBuffer Tokens = std::move(CollectTokens).consume();"
+          },
+          {
+            "n": 774,
+            "text": "  // Makes SelectionTree build much faster."
+          },
+          {
+            "n": 775,
+            "text": "  Tokens.indexExpandedTokens();"
+          },
+          {
+            "n": 776,
+            "text": "  std::vector<Decl *> ParsedDecls = Action->takeTopLevelDecls();"
+          },
+          {
+            "n": 777,
+            "text": "  // AST traversals should exclude the preamble, to avoid performance cliffs."
+          },
+          {
+            "n": 778,
+            "text": "  Clang->getASTContext().setTraversalScope(ParsedDecls);"
+          },
+          {
+            "n": 779,
+            "text": "  if (!CTChecks.empty()) {"
+          },
+          {
+            "n": 780,
+            "text": "    // Run the AST-dependent part of the clang-tidy checks."
+          },
+          {
+            "n": 781,
+            "text": "    // (The preprocessor part ran already, via PPCallbacks)."
+          },
+          {
+            "n": 782,
+            "text": "    trace::Span Tracer(\"ClangTidyMatch\");"
+          },
+          {
+            "n": 783,
+            "text": "    CTFinder.matchAST(Clang->getASTContext());"
+          },
+          {
+            "n": 784,
+            "text": "  }"
+          },
+          {
+            "n": 785,
+            "text": "  for (const auto &L : ASTListeners)"
+          },
+          {
+            "n": 786,
+            "text": "    L->afterExecute(*Clang);"
+          }
+        ]
+      }
+    ],
+    "after": [
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/ParsedAST.cpp",
+        "rows": [
+          {
+            "n": 504,
+            "text": "  // We have to consume the tokens before running clang-tidy to avoid collecting"
+          },
+          {
+            "n": 505,
+            "text": "  // tokens from running the preprocessor inside the checks (only"
+          },
+          {
+            "n": 506,
+            "text": "  // modernize-use-trailing-return-type does that today)."
+          },
+          {
+            "n": 507,
+            "text": "  syntax::TokenBuffer Tokens = std::move(CollectTokens).consume();"
+          },
+          {
+            "n": 508,
+            "text": "  // Makes SelectionTree build much faster."
+          },
+          {
+            "n": 509,
+            "text": "  Tokens.indexExpandedTokens();"
+          },
+          {
+            "n": 510,
+            "text": "  std::vector<Decl *> ParsedDecls = Action->takeTopLevelDecls();"
+          },
+          {
+            "n": 511,
+            "text": "  // AST traversals should exclude the preamble, to avoid performance cliffs."
+          },
+          {
+            "n": 512,
+            "text": "  Clang->getASTContext().setTraversalScope(ParsedDecls);"
+          },
+          {
+            "n": 513,
+            "text": "  for (const auto &L : ASTListeners)"
+          },
+          {
+            "n": 514,
+            "text": "    L->afterExecute(*Clang);"
+          }
+        ]
+      },
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/ClangTidyFeatureModule.cpp",
+        "rows": [
+          {
+            "n": 284,
+            "text": "  void afterExecute(CompilerInstance &CI) override {"
+          },
+          {
+            "n": 285,
+            "text": "    if (Checks.empty())"
+          },
+          {
+            "n": 286,
+            "text": "      return;"
+          },
+          {
+            "n": 287,
+            "text": "    // Run the AST-dependent part of the clang-tidy checks."
+          },
+          {
+            "n": 288,
+            "text": "    // (The preprocessor part ran already, via PPCallbacks)."
+          },
+          {
+            "n": 289,
+            "text": "    trace::Span Tracer(\"ClangTidyMatch\");"
+          },
+          {
+            "n": 290,
+            "text": "    Finder.matchAST(CI.getASTContext());"
+          },
+          {
+            "n": 291,
+            "text": "  }"
+          }
+        ]
+      }
+    ],
+    "notes": [
+      "Token finalization, traversal restriction and hook dispatch stay in ParsedAST.",
+      "There is no deferred consumer, consumer replacement, or reinitialization."
+    ],
+    "kind": "MOVE + ADAPT",
+    "height": 955
+  },
+  {
+    "id": "06-multiplex",
+    "title": "Existing hooks; no consumer replacement",
+    "desc": "The listener implements the existing FeatureModule interface. Matching runs directly in afterExecute; no new AST-consumer adapter is needed.",
+    "before": [
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/FeatureModule.h",
+        "rows": [
+          {
+            "n": 119,
+            "text": "    /// remain consistent with the preamble, which may already have been built."
+          },
+          {
+            "n": 120,
+            "text": "    virtual void beforeBeginSourceFile(CompilerInstance &CI) {}"
+          },
+          {
+            "n": 129,
+            "text": "    /// called."
+          },
+          {
+            "n": 130,
+            "text": "    virtual void beforePPCallbacks(CompilerInstance &CI) {}"
+          },
+          {
+            "n": 139,
+            "text": "    /// The preprocessor has not received EndSourceFile() yet."
+          },
+          {
+            "n": 140,
+            "text": "    virtual void afterExecute(CompilerInstance &CI) {}"
+          },
+          {
+            "n": 144,
+            "text": "    /// actions later on."
+          },
+          {
+            "n": 145,
+            "text": "    virtual void sawDiagnostic(const clang::Diagnostic &, clangd::Diag &) {}"
+          },
+          {
+            "n": 148,
+            "text": "    /// fixes, and before it is returned to the caller."
+          },
+          {
+            "n": 149,
+            "text": "    virtual void finalizeDiagnostic(clangd::Diag &) {}"
+          }
+        ]
+      }
+    ],
+    "after": [
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/ClangTidyFeatureModule.cpp",
+        "rows": [
+          {
+            "n": 172,
+            "text": "  void beforeBeginSourceFile(CompilerInstance &CI) override {"
+          },
+          {
+            "n": 173,
+            "text": "    // Warning options must precede frontend initialization: module loading in"
+          },
+          {
+            "n": 174,
+            "text": "    // BeginSourceFile() can consult their severity to decide whether to fail."
+          }
+        ]
+      },
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/ClangTidyFeatureModule.cpp",
+        "rows": [
+          {
+            "n": 231,
+            "text": "  void beforePPCallbacks(CompilerInstance &CI) override {"
+          },
+          {
+            "n": 232,
+            "text": "    // Preamble builds don't call beforeBeginSourceFile(). Running tidy there"
+          },
+          {
+            "n": 233,
+            "text": "    // would duplicate diagnostics and interfere with PCH generation."
+          },
+          {
+            "n": 234,
+            "text": "    if (!Options)"
+          },
+          {
+            "n": 235,
+            "text": "      return;"
+          },
+          {
+            "n": 236,
+            "text": ""
+          }
+        ]
+      },
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/ClangTidyFeatureModule.cpp",
+        "rows": [
+          {
+            "n": 284,
+            "text": "  void afterExecute(CompilerInstance &CI) override {"
+          },
+          {
+            "n": 285,
+            "text": "    if (Checks.empty())"
+          },
+          {
+            "n": 286,
+            "text": "      return;"
+          },
+          {
+            "n": 287,
+            "text": "    // Run the AST-dependent part of the clang-tidy checks."
+          },
+          {
+            "n": 288,
+            "text": "    // (The preprocessor part ran already, via PPCallbacks)."
+          },
+          {
+            "n": 289,
+            "text": "    trace::Span Tracer(\"ClangTidyMatch\");"
+          },
+          {
+            "n": 290,
+            "text": "    Finder.matchAST(CI.getASTContext());"
+          },
+          {
+            "n": 291,
+            "text": "  }"
+          }
+        ]
+      },
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/ClangTidyFeatureModule.cpp",
+        "rows": [
+          {
+            "n": 293,
+            "text": "  void sawDiagnostic(const clang::Diagnostic &Info, clangd::Diag &D) override {"
+          },
+          {
+            "n": 294,
+            "text": "    // Preserve the previous suppression policy when no checks are active."
+          },
+          {
+            "n": 295,
+            "text": "    if (Checks.empty())"
+          },
+          {
+            "n": 296,
+            "text": "      return;"
+          },
+          {
+            "n": 297,
+            "text": "    std::string CheckName = Context->getCheckName(Info.getID());"
+          }
+        ]
+      },
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/ClangTidyFeatureModule.cpp",
+        "rows": [
+          {
+            "n": 344,
+            "text": "  void finalizeDiagnostic(clangd::Diag &D) override {"
+          },
+          {
+            "n": 345,
+            "text": "    // Constructor diagnostics precede check initialization."
+          },
+          {
+            "n": 346,
+            "text": "    if (D.Source == Diag::Unknown && Context &&"
+          },
+          {
+            "n": 347,
+            "text": "        !Context->isCompilerDiagnostic(D.ID)) {"
+          },
+          {
+            "n": 348,
+            "text": "      auto Name = Context->getCheckName(D.ID);"
+          }
+        ]
+      }
+    ],
+    "notes": [
+      "FeatureModule.h is unchanged; its lifecycle hooks are already in the parent.",
+      "The tidy module neither takes nor replaces the existing ASTConsumer."
+    ],
+    "kind": "EXISTING INTERFACE",
+    "height": 1263
+  },
+  {
+    "id": "07-filtering",
+    "title": "Diagnostic suppression and severity policy",
+    "desc": "The tidy-specific level adjuster moves to sawDiagnostic(), which edits the assembled diagnostic. Retains clangd suppression, NOLINT, system-macro filtering and warnings-as-errors. The nonempty-check guard is preserved: without active checks, tidy suppression and promotion remain disabled.",
+    "before": [
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/ParsedAST.cpp",
+        "rows": [
+          {
+            "n": 641,
+            "text": "      if (!CTChecks.empty()) {"
+          },
+          {
+            "n": 642,
+            "text": "        std::string CheckName = CTContext->getCheckName(Info.getID());"
+          },
+          {
+            "n": 643,
+            "text": "        bool IsClangTidyDiag = !CheckName.empty();"
+          },
+          {
+            "n": 644,
+            "text": "        if (IsClangTidyDiag) {"
+          },
+          {
+            "n": 645,
+            "text": "          if (Cfg.Diagnostics.Suppress.contains(CheckName))"
+          },
+          {
+            "n": 646,
+            "text": "            return DiagnosticsEngine::Ignored;"
+          },
+          {
+            "n": 653,
+            "text": "          bool IsInsideMainFile ="
+          },
+          {
+            "n": 654,
+            "text": "              Info.hasSourceManager() &&"
+          },
+          {
+            "n": 655,
+            "text": "              isInsideMainFile(Info.getLocation(), Info.getSourceManager());"
+          },
+          {
+            "n": 656,
+            "text": "          SmallVector<tooling::Diagnostic, 1> TidySuppressedErrors;"
+          },
+          {
+            "n": 657,
+            "text": "          if (IsInsideMainFile && CTContext->shouldSuppressDiagnostic("
+          },
+          {
+            "n": 658,
+            "text": "                                      DiagLevel, Info, TidySuppressedErrors,"
+          },
+          {
+            "n": 659,
+            "text": "                                      /*AllowIO=*/false,"
+          },
+          {
+            "n": 660,
+            "text": "                                      /*EnableNolintBlocks=*/true)) {"
+          },
+          {
+            "n": 661,
+            "text": "            // FIXME: should we expose the suppression error (invalid use of"
+          },
+          {
+            "n": 662,
+            "text": "            // NOLINT comments)?"
+          },
+          {
+            "n": 667,
+            "text": "              Info.getSourceManager().isInSystemMacro(Info.getLocation()))"
+          },
+          {
+            "n": 668,
+            "text": "            return DiagnosticsEngine::Ignored;"
+          },
+          {
+            "n": 669,
+            "text": ""
+          },
+          {
+            "n": 670,
+            "text": "          // Check for warning-as-error."
+          },
+          {
+            "n": 671,
+            "text": "          if (DiagLevel == DiagnosticsEngine::Warning &&"
+          },
+          {
+            "n": 672,
+            "text": "              CTContext->treatAsError(CheckName)) {"
+          },
+          {
+            "n": 673,
+            "text": "            return DiagnosticsEngine::Error;"
+          },
+          {
+            "n": 674,
+            "text": "          }"
+          },
+          {
+            "n": 675,
+            "text": "        }"
+          },
+          {
+            "n": 676,
+            "text": "      }"
+          },
+          {
+            "n": 677,
+            "text": "      return DiagLevel;"
+          },
+          {
+            "n": 678,
+            "text": "    });"
+          }
+        ]
+      }
+    ],
+    "after": [
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/ClangTidyFeatureModule.cpp",
+        "rows": [
+          {
+            "n": 293,
+            "text": "  void sawDiagnostic(const clang::Diagnostic &Info, clangd::Diag &D) override {"
+          },
+          {
+            "n": 294,
+            "text": "    // Preserve the previous suppression policy when no checks are active."
+          },
+          {
+            "n": 295,
+            "text": "    if (Checks.empty())"
+          },
+          {
+            "n": 296,
+            "text": "      return;"
+          },
+          {
+            "n": 297,
+            "text": "    std::string CheckName = Context->getCheckName(Info.getID());"
+          },
+          {
+            "n": 298,
+            "text": "    if (CheckName.empty())"
+          },
+          {
+            "n": 299,
+            "text": "      return;"
+          },
+          {
+            "n": 300,
+            "text": ""
+          },
+          {
+            "n": 301,
+            "text": "    if (Config::current().Diagnostics.Suppress.contains(CheckName)) {"
+          },
+          {
+            "n": 302,
+            "text": "      D.Severity = DiagnosticsEngine::Ignored;"
+          },
+          {
+            "n": 303,
+            "text": "      return;"
+          },
+          {
+            "n": 312,
+            "text": "    bool InsideMainFile ="
+          },
+          {
+            "n": 313,
+            "text": "        Info.hasSourceManager() &&"
+          },
+          {
+            "n": 314,
+            "text": "        isInsideMainFile(Info.getLocation(), Info.getSourceManager());"
+          },
+          {
+            "n": 315,
+            "text": "    llvm::SmallVector<tooling::Diagnostic, 1> SuppressionErrors;"
+          },
+          {
+            "n": 316,
+            "text": "    if (InsideMainFile &&"
+          },
+          {
+            "n": 317,
+            "text": "        Context->shouldSuppressDiagnostic(D.Severity, Info, SuppressionErrors,"
+          },
+          {
+            "n": 318,
+            "text": "                                          /*AllowIO=*/false,"
+          },
+          {
+            "n": 319,
+            "text": "                                          /*EnableNolintBlocks=*/true)) {"
+          },
+          {
+            "n": 320,
+            "text": "      // FIXME: should we expose the suppression error (invalid use of"
+          },
+          {
+            "n": 321,
+            "text": "      // NOLINT comments)?"
+          },
+          {
+            "n": 322,
+            "text": "      D.Severity = DiagnosticsEngine::Ignored;"
+          },
+          {
+            "n": 323,
+            "text": "      return;"
+          },
+          {
+            "n": 324,
+            "text": "    }"
+          },
+          {
+            "n": 325,
+            "text": "    if (!Context->getOptions().SystemHeaders.value_or(false) &&"
+          },
+          {
+            "n": 326,
+            "text": "        Info.hasSourceManager() &&"
+          },
+          {
+            "n": 327,
+            "text": "        Info.getSourceManager().isInSystemMacro(Info.getLocation())) {"
+          },
+          {
+            "n": 328,
+            "text": "      D.Severity = DiagnosticsEngine::Ignored;"
+          },
+          {
+            "n": 329,
+            "text": "      return;"
+          },
+          {
+            "n": 330,
+            "text": "    }"
+          },
+          {
+            "n": 331,
+            "text": "    // Check for warning-as-error."
+          },
+          {
+            "n": 332,
+            "text": "    if (D.Severity == DiagnosticsEngine::Warning &&"
+          },
+          {
+            "n": 333,
+            "text": "        Context->treatAsError(CheckName))"
+          },
+          {
+            "n": 334,
+            "text": "      D.Severity = DiagnosticsEngine::Error;"
+          }
+        ]
+      }
+    ],
+    "kind": "MOVE + POLICY PRESERVED",
+    "notes": [
+      "Suppression, NOLINT, system-macro policy and warnings-as-errors retain their previous guard.",
+      "With no active tidy checks, compiler-warning suppression and promotion remain unchanged."
+    ],
+    "height": 1311
+  },
+  {
+    "id": "08-metadata",
+    "title": "Diagnostic names and source move out of StoreDiags",
+    "desc": "The listener identifies tidy diagnostics; StoreDiags no longer receives a ClangTidyContext and preserves supplied metadata. Compiler diagnostics retain their Clang source and -W name. Flushing, compiler metadata fallback, generic finalizer dispatch and deduplication stay in StoreDiags.",
+    "before": [
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/Diagnostics.cpp",
+        "rows": [
+          {
+            "n": 574,
+            "text": "std::vector<Diag> StoreDiags::take(const clang::tidy::ClangTidyContext *Tidy) {"
+          },
+          {
+            "n": 602,
+            "text": "      Diag.Source = Diag::Clang;"
+          },
+          {
+            "n": 603,
+            "text": "    } else if (Tidy != nullptr) {"
+          },
+          {
+            "n": 604,
+            "text": "      std::string TidyDiag = Tidy->getCheckName(Diag.ID);"
+          },
+          {
+            "n": 605,
+            "text": "      if (!TidyDiag.empty()) {"
+          },
+          {
+            "n": 606,
+            "text": "        Diag.Name = std::move(TidyDiag);"
+          },
+          {
+            "n": 607,
+            "text": "        Diag.Source = Diag::ClangTidy;"
+          }
+        ]
+      },
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/Diagnostics.h",
+        "rows": [
+          {
+            "n": 139,
+            "text": "public:"
+          },
+          {
+            "n": 140,
+            "text": "  // The ClangTidyContext populates Source and Name for clang-tidy diagnostics."
+          },
+          {
+            "n": 141,
+            "text": "  std::vector<Diag> take(const clang::tidy::ClangTidyContext *Tidy = nullptr);"
+          }
+        ]
+      },
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/ParsedAST.cpp",
+        "rows": [
+          {
+            "n": 806,
+            "text": "    std::vector<Diag> D = ASTDiags.take(&*CTContext);"
+          },
+          {
+            "n": 807,
+            "text": "    Diags.insert(Diags.end(), D.begin(), D.end());"
+          }
+        ]
+      }
+    ],
+    "after": [
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/ClangTidyFeatureModule.cpp",
+        "rows": [
+          {
+            "n": 336,
+            "text": "    // Compiler warnings keep their clang source and -W name, even when their"
+          },
+          {
+            "n": 337,
+            "text": "    // severity or suppression is controlled by clang-tidy options."
+          },
+          {
+            "n": 338,
+            "text": "    if (!Context->isCompilerDiagnostic(Info.getID())) {"
+          },
+          {
+            "n": 339,
+            "text": "      D.Name = std::move(CheckName);"
+          },
+          {
+            "n": 340,
+            "text": "      D.Source = Diag::ClangTidy;"
+          },
+          {
+            "n": 341,
+            "text": "    }"
+          }
+        ]
+      },
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/Diagnostics.cpp",
+        "rows": [
+          {
+            "n": 567,
+            "text": "std::vector<Diag> StoreDiags::take() {"
+          },
+          {
+            "n": 568,
+            "text": "  // Do not forget to emit a pending diagnostic if there is one."
+          },
+          {
+            "n": 569,
+            "text": "  flushLastDiag();"
+          },
+          {
+            "n": 570,
+            "text": ""
+          },
+          {
+            "n": 571,
+            "text": "  // Fill in name/source now that we have all the context needed to map them."
+          },
+          {
+            "n": 572,
+            "text": "  for (auto &Diag : Output) {"
+          },
+          {
+            "n": 573,
+            "text": "    if (const char *ClangDiag = getDiagnosticCode(Diag.ID)) {"
+          },
+          {
+            "n": 574,
+            "text": "      // Feature modules may already have supplied diagnostic metadata."
+          },
+          {
+            "n": 575,
+            "text": "      if (Diag.Source == Diag::Unknown)"
+          },
+          {
+            "n": 576,
+            "text": "        Diag.Source = Diag::Clang;"
+          },
+          {
+            "n": 577,
+            "text": "      if (Diag.Name.empty()) {"
+          },
+          {
+            "n": 578,
+            "text": "        // Warnings controlled by -Wfoo are better recognized by that name."
+          }
+        ]
+      },
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/Diagnostics.h",
+        "rows": [
+          {
+            "n": 135,
+            "text": "class StoreDiags : public DiagnosticConsumer {"
+          },
+          {
+            "n": 136,
+            "text": "public:"
+          },
+          {
+            "n": 137,
+            "text": "  std::vector<Diag> take();"
+          }
+        ]
+      },
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/ParsedAST.cpp",
+        "rows": [
+          {
+            "n": 534,
+            "text": "    std::vector<Diag> D = ASTDiags.take();"
+          },
+          {
+            "n": 535,
+            "text": "    Diags.insert(Diags.end(), D.begin(), D.end());"
+          }
+        ]
+      }
+    ],
+    "kind": "MOVE + GENERIC FALLBACK",
+    "notes": [
+      "StoreDiags keeps compiler metadata fallback and generic finalizer dispatch.",
+      "The generic callback contract for location-less diagnostics is unchanged."
+    ],
+    "height": 1179
+  },
+  {
+    "id": "09-finalize",
+    "title": "Message cleanup and tidy-specific tags",
+    "desc": "Message cleanup and tidy tags move into finalizeDiagnostic(), after notes and fixes are assembled. Constructor errors get tidy metadata here because they precede check initialization. Cleanup still covers messages, notes and fixes; containment checks avoid duplicate tags.",
+    "before": [
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/Diagnostics.cpp",
+        "rows": [
+          {
+            "n": 392,
+            "text": "  if (D.Source == Diag::ClangTidy) {"
+          },
+          {
+            "n": 393,
+            "text": "    if (llvm::StringRef(D.Name).starts_with(\"misc-unused-\"))"
+          },
+          {
+            "n": 394,
+            "text": "      D.Tags.push_back(DiagnosticTag::Unnecessary);"
+          },
+          {
+            "n": 395,
+            "text": "    if (llvm::StringRef(D.Name).starts_with(\"modernize-\"))"
+          },
+          {
+            "n": 396,
+            "text": "      D.Tags.push_back(DiagnosticTag::Deprecated);"
+          },
+          {
+            "n": 397,
+            "text": "  }"
+          },
+          {
+            "n": 398,
+            "text": "}"
+          },
+          {
+            "n": 399,
+            "text": "} // namespace"
+          },
+          {
+            "n": 610,
+            "text": "        auto CleanMessage = [&](std::string &Msg) {"
+          },
+          {
+            "n": 611,
+            "text": "          StringRef Rest(Msg);"
+          },
+          {
+            "n": 612,
+            "text": "          if (Rest.consume_back(\"]\") && Rest.consume_back(Diag.Name) &&"
+          },
+          {
+            "n": 613,
+            "text": "              Rest.consume_back(\" [\"))"
+          },
+          {
+            "n": 614,
+            "text": "            Msg.resize(Rest.size());"
+          },
+          {
+            "n": 615,
+            "text": "        };"
+          },
+          {
+            "n": 616,
+            "text": "        CleanMessage(Diag.Message);"
+          },
+          {
+            "n": 617,
+            "text": "        for (auto &Note : Diag.Notes)"
+          },
+          {
+            "n": 618,
+            "text": "          CleanMessage(Note.Message);"
+          },
+          {
+            "n": 619,
+            "text": "        for (auto &Fix : Diag.Fixes)"
+          },
+          {
+            "n": 620,
+            "text": "          CleanMessage(Fix.Message);"
+          }
+        ]
+      }
+    ],
+    "after": [
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/ClangTidyFeatureModule.cpp",
+        "rows": [
+          {
+            "n": 344,
+            "text": "  void finalizeDiagnostic(clangd::Diag &D) override {"
+          },
+          {
+            "n": 345,
+            "text": "    // Constructor diagnostics precede check initialization."
+          },
+          {
+            "n": 346,
+            "text": "    if (D.Source == Diag::Unknown && Context &&"
+          },
+          {
+            "n": 347,
+            "text": "        !Context->isCompilerDiagnostic(D.ID)) {"
+          },
+          {
+            "n": 348,
+            "text": "      auto Name = Context->getCheckName(D.ID);"
+          },
+          {
+            "n": 349,
+            "text": "      if (!Name.empty()) {"
+          },
+          {
+            "n": 350,
+            "text": "        D.Name = std::move(Name);"
+          },
+          {
+            "n": 351,
+            "text": "        D.Source = Diag::ClangTidy;"
+          },
+          {
+            "n": 352,
+            "text": "      }"
+          },
+          {
+            "n": 353,
+            "text": "    }"
+          },
+          {
+            "n": 354,
+            "text": "    if (D.Source != Diag::ClangTidy)"
+          },
+          {
+            "n": 355,
+            "text": "      return;"
+          },
+          {
+            "n": 356,
+            "text": "    // clang-tidy bakes the name into diagnostic messages. Strip it out."
+          },
+          {
+            "n": 357,
+            "text": "    // It would be much nicer to make clang-tidy not do this."
+          },
+          {
+            "n": 358,
+            "text": "    auto CleanMessage = [&](std::string &Message) {"
+          },
+          {
+            "n": 359,
+            "text": "      llvm::StringRef Rest(Message);"
+          },
+          {
+            "n": 360,
+            "text": "      if (Rest.consume_back(\"]\") && Rest.consume_back(D.Name) &&"
+          },
+          {
+            "n": 361,
+            "text": "          Rest.consume_back(\" [\"))"
+          },
+          {
+            "n": 362,
+            "text": "        Message.resize(Rest.size());"
+          },
+          {
+            "n": 363,
+            "text": "    };"
+          },
+          {
+            "n": 364,
+            "text": "    CleanMessage(D.Message);"
+          },
+          {
+            "n": 365,
+            "text": "    for (auto &Note : D.Notes)"
+          },
+          {
+            "n": 366,
+            "text": "      CleanMessage(Note.Message);"
+          },
+          {
+            "n": 367,
+            "text": "    for (auto &Fix : D.Fixes)"
+          },
+          {
+            "n": 368,
+            "text": "      CleanMessage(Fix.Message);"
+          },
+          {
+            "n": 369,
+            "text": "    if (llvm::StringRef(D.Name).starts_with(\"misc-unused-\") &&"
+          },
+          {
+            "n": 370,
+            "text": "        !llvm::is_contained(D.Tags, DiagnosticTag::Unnecessary))"
+          },
+          {
+            "n": 371,
+            "text": "      D.Tags.push_back(DiagnosticTag::Unnecessary);"
+          },
+          {
+            "n": 372,
+            "text": "    if (llvm::StringRef(D.Name).starts_with(\"modernize-\") &&"
+          },
+          {
+            "n": 373,
+            "text": "        !llvm::is_contained(D.Tags, DiagnosticTag::Deprecated))"
+          },
+          {
+            "n": 374,
+            "text": "      D.Tags.push_back(DiagnosticTag::Deprecated);"
+          }
+        ]
+      }
+    ],
+    "kind": "MOVE + SMALL GUARD",
+    "notes": [
+      "Message cleanup covers the diagnostic, its notes and fixes.",
+      "Fallback names handle constructor diagnostics; containment checks avoid duplicate tags."
+    ],
+    "height": 1199
+  },
+  {
+    "id": "10-wiring",
+    "title": "Application wiring replaces the provider plumbing",
+    "desc": "ClangdMain explicitly creates the tidy module only when EnableClangTidy is true. Server and ParseInputs retain their existing generic FeatureModules forwarding.",
+    "before": [
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/tool/ClangdMain.cpp",
+        "rows": [
+          {
+            "n": 1024,
+            "text": "      Providers.push_back(provideClangdConfig());"
+          },
+          {
+            "n": 1025,
+            "text": "    Providers.push_back(provideDefaultChecks());"
+          },
+          {
+            "n": 1026,
+            "text": "    Providers.push_back(disableUnusableChecks());"
+          },
+          {
+            "n": 1027,
+            "text": "    ClangTidyOptProvider = combine(std::move(Providers));"
+          },
+          {
+            "n": 1028,
+            "text": "    Opts.ClangTidyProvider = ClangTidyOptProvider;"
+          },
+          {
+            "n": 1029,
+            "text": "  }"
+          }
+        ]
+      },
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/ClangdServer.h",
+        "rows": [
+          {
+            "n": 148,
+            "text": "    /// The Options provider to use when running clang-tidy. If null, clang-tidy"
+          },
+          {
+            "n": 149,
+            "text": "    /// checks will be disabled."
+          },
+          {
+            "n": 150,
+            "text": "    TidyProviderRef ClangTidyProvider;"
+          },
+          {
+            "n": 510,
+            "text": "  // When set, provides clang-tidy options for a specific file."
+          },
+          {
+            "n": 511,
+            "text": "  TidyProviderRef ClangTidyProvider;"
+          }
+        ]
+      },
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/ClangdServer.cpp",
+        "rows": [
+          {
+            "n": 314,
+            "text": "  Inputs.ForceRebuild = ForceRebuild;"
+          },
+          {
+            "n": 315,
+            "text": "  Inputs.Opts = std::move(Opts);"
+          },
+          {
+            "n": 316,
+            "text": "  Inputs.Index = Index;"
+          },
+          {
+            "n": 317,
+            "text": "  Inputs.ClangTidyProvider = ClangTidyProvider;"
+          },
+          {
+            "n": 318,
+            "text": "  Inputs.FeatureModules = FeatureModules;"
+          },
+          {
+            "n": 319,
+            "text": "  Inputs.ModulesManager = ModulesManager;"
+          }
+        ]
+      },
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/Compiler.h",
+        "rows": [
+          {
+            "n": 61,
+            "text": "  const SymbolIndex *Index = nullptr;"
+          },
+          {
+            "n": 62,
+            "text": "  ParseOptions Opts = ParseOptions();"
+          },
+          {
+            "n": 63,
+            "text": "  TidyProviderRef ClangTidyProvider = {};"
+          },
+          {
+            "n": 64,
+            "text": "  // Used to acquire ASTListeners when parsing files."
+          },
+          {
+            "n": 65,
+            "text": "  FeatureModuleSet *FeatureModules = nullptr;"
+          },
+          {
+            "n": 66,
+            "text": "  // Used to build and manage (C++) modules."
+          }
+        ]
+      }
+    ],
+    "after": [
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/tool/ClangdMain.cpp",
+        "rows": [
+          {
+            "n": 1045,
+            "text": "  FeatureModuleSet ModuleSet = FeatureModuleSet::fromRegistry();"
+          },
+          {
+            "n": 1046,
+            "text": "  if (EnableClangTidy)"
+          },
+          {
+            "n": 1047,
+            "text": "    ModuleSet.add(std::make_unique<ClangTidyFeatureModule>("
+          },
+          {
+            "n": 1048,
+            "text": "        std::move(ClangTidyOptProvider)));"
+          },
+          {
+            "n": 1049,
+            "text": "  if (ModuleSet.begin() != ModuleSet.end())"
+          },
+          {
+            "n": 1050,
+            "text": "    Opts.FeatureModules = &ModuleSet;"
+          },
+          {
+            "n": 1051,
+            "text": ""
+          }
+        ]
+      },
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/ClangdServer.cpp",
+        "rows": [
+          {
+            "n": 313,
+            "text": "  Inputs.ForceRebuild = ForceRebuild;"
+          },
+          {
+            "n": 314,
+            "text": "  Inputs.Opts = std::move(Opts);"
+          },
+          {
+            "n": 315,
+            "text": "  Inputs.Index = Index;"
+          },
+          {
+            "n": 316,
+            "text": "  Inputs.FeatureModules = FeatureModules;"
+          },
+          {
+            "n": 317,
+            "text": "  Inputs.ModulesManager = ModulesManager;"
+          },
+          {
+            "n": 318,
+            "text": "  adjustParseInputs(Inputs, File);"
+          }
+        ]
+      },
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/Compiler.h",
+        "rows": [
+          {
+            "n": 60,
+            "text": "  const SymbolIndex *Index = nullptr;"
+          },
+          {
+            "n": 61,
+            "text": "  ParseOptions Opts = ParseOptions();"
+          },
+          {
+            "n": 62,
+            "text": "  // Used to acquire ASTListeners when parsing files."
+          },
+          {
+            "n": 63,
+            "text": "  FeatureModuleSet *FeatureModules = nullptr;"
+          },
+          {
+            "n": 64,
+            "text": "  // Used to build and manage (C++) modules."
+          },
+          {
+            "n": 65,
+            "text": "  ModulesBuilder *ModulesManager = nullptr;"
+          }
+        ]
+      },
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/tool/Check.cpp",
+        "rows": [
+          {
+            "n": 208,
+            "text": "    Inputs.CompileCommand = Cmd;"
+          },
+          {
+            "n": 209,
+            "text": "    Inputs.TFS = &TFS;"
+          },
+          {
+            "n": 210,
+            "text": "    Inputs.FeatureModules = Opts.FeatureModules;"
+          },
+          {
+            "n": 211,
+            "text": "    Inputs.Opts.PreambleParseForwardingFunctions ="
+          },
+          {
+            "n": 212,
+            "text": "        Opts.PreambleParseForwardingFunctions;"
+          }
+        ]
+      }
+    ],
+    "notes": [
+      "Module-set construction and generic forwarding already existed.",
+      "Check mode no longer forces the tidy module to load when clang-tidy is disabled."
+    ],
+    "kind": "APPLICATION WIRING",
+    "height": 1177
+  },
+  {
+    "id": "11-provider",
+    "title": "Module-owned provider snapshots",
+    "desc": "A module owns the options provider. Each listener captures a shared snapshot, allowing later provider replacement. An empty provider disables new listeners. Existing listeners keep their captured provider. This ownership and synchronization code is new, not relocated from ParsedAST.",
+    "before": [
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/ClangdServer.h",
+        "rows": [
+          {
+            "n": 148,
+            "text": "    /// The Options provider to use when running clang-tidy. If null, clang-tidy"
+          },
+          {
+            "n": 149,
+            "text": "    /// checks will be disabled."
+          },
+          {
+            "n": 150,
+            "text": "    TidyProviderRef ClangTidyProvider;"
+          }
+        ]
+      },
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/Compiler.h",
+        "rows": [
+          {
+            "n": 63,
+            "text": "  TidyProviderRef ClangTidyProvider = {};"
+          },
+          {
+            "n": 64,
+            "text": "  // Used to acquire ASTListeners when parsing files."
+          },
+          {
+            "n": 65,
+            "text": "  FeatureModuleSet *FeatureModules = nullptr;"
+          }
+        ]
+      }
+    ],
+    "after": [
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/ClangTidyFeatureModule.h",
+        "rows": [
+          {
+            "n": 22,
+            "text": "class ClangTidyFeatureModule final : public FeatureModule {"
+          },
+          {
+            "n": 23,
+            "text": "public:"
+          },
+          {
+            "n": 24,
+            "text": "  /// Construct explicitly with the application's clang-tidy options provider."
+          },
+          {
+            "n": 25,
+            "text": "  /// Takes ownership of the provider; an empty provider disables checks."
+          },
+          {
+            "n": 26,
+            "text": "  explicit ClangTidyFeatureModule(TidyProvider OptionsProvider) {"
+          },
+          {
+            "n": 27,
+            "text": "    setProvider(std::move(OptionsProvider));"
+          },
+          {
+            "n": 28,
+            "text": "  }"
+          },
+          {
+            "n": 29,
+            "text": ""
+          },
+          {
+            "n": 30,
+            "text": "  /// Swap provider snapshots, e.g. to temporarily override the configuration"
+          },
+          {
+            "n": 31,
+            "text": "  /// for benchmarking and restore it afterwards. Existing listeners retain"
+          },
+          {
+            "n": 32,
+            "text": "  /// their snapshot."
+          },
+          {
+            "n": 33,
+            "text": "  void swapProvider(std::shared_ptr<const TidyProvider> &OptionsProvider);"
+          },
+          {
+            "n": 34,
+            "text": ""
+          },
+          {
+            "n": 35,
+            "text": "  std::unique_ptr<ASTListener> astListeners() override;"
+          },
+          {
+            "n": 36,
+            "text": ""
+          },
+          {
+            "n": 37,
+            "text": "private:"
+          },
+          {
+            "n": 38,
+            "text": "  void setProvider(TidyProvider OptionsProvider);"
+          },
+          {
+            "n": 39,
+            "text": ""
+          },
+          {
+            "n": 40,
+            "text": "  std::mutex ProviderMu;"
+          },
+          {
+            "n": 41,
+            "text": "  std::shared_ptr<const TidyProvider> Provider;"
+          }
+        ]
+      },
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/ClangTidyFeatureModule.cpp",
+        "rows": [
+          {
+            "n": 389,
+            "text": "std::unique_ptr<FeatureModule::ASTListener>"
+          },
+          {
+            "n": 390,
+            "text": "ClangTidyFeatureModule::astListeners() {"
+          },
+          {
+            "n": 391,
+            "text": "  std::lock_guard<std::mutex> Lock(ProviderMu);"
+          },
+          {
+            "n": 392,
+            "text": "  if (!Provider)"
+          },
+          {
+            "n": 393,
+            "text": "    return nullptr;"
+          },
+          {
+            "n": 394,
+            "text": "  return std::make_unique<TidyASTListener>(Provider);"
+          },
+          {
+            "n": 395,
+            "text": "}"
+          },
+          {
+            "n": 396,
+            "text": ""
+          },
+          {
+            "n": 397,
+            "text": "void ClangTidyFeatureModule::setProvider(TidyProvider OptionsProvider) {"
+          },
+          {
+            "n": 398,
+            "text": "  std::shared_ptr<const TidyProvider> Replacement;"
+          },
+          {
+            "n": 399,
+            "text": "  if (OptionsProvider)"
+          },
+          {
+            "n": 400,
+            "text": "    Replacement ="
+          },
+          {
+            "n": 401,
+            "text": "        std::make_shared<const TidyProvider>(std::move(OptionsProvider));"
+          },
+          {
+            "n": 402,
+            "text": "  swapProvider(Replacement);"
+          },
+          {
+            "n": 403,
+            "text": "}"
+          },
+          {
+            "n": 404,
+            "text": ""
+          },
+          {
+            "n": 405,
+            "text": "void ClangTidyFeatureModule::swapProvider("
+          },
+          {
+            "n": 406,
+            "text": "    std::shared_ptr<const TidyProvider> &OptionsProvider) {"
+          },
+          {
+            "n": 407,
+            "text": "  std::lock_guard<std::mutex> Lock(ProviderMu);"
+          },
+          {
+            "n": 408,
+            "text": "  Provider.swap(OptionsProvider);"
+          },
+          {
+            "n": 409,
+            "text": "}"
+          }
+        ]
+      }
+    ],
+    "kind": "NEW OWNERSHIP",
+    "notes": [
+      "A module owns the options provider. Each listener captures a shared snapshot, allowing later provider replacement. An empty provider disables new listeners. Existing listeners keep their captured provider. This ownership and synchronization code is new, not relocated from ParsedAST."
+    ],
+    "height": 1463
+  },
+  {
+    "id": "12-benchmark",
+    "title": "Check-mode timing swaps only tidy's provider",
+    "desc": "Timing temporarily swaps only tidy's provider, leaving other modules active. Clang-tidy must be enabled; a missing module produces an error.",
+    "before": [
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/tool/Check.cpp",
+        "rows": [
+          {
+            "n": 321,
+            "text": "      TidyProvider CTProvider = [&](tidy::ClangTidyOptions &Opts,"
+          },
+          {
+            "n": 322,
+            "text": "                                    llvm::StringRef) {"
+          },
+          {
+            "n": 323,
+            "text": "        Opts.Checks = Checks.str();"
+          },
+          {
+            "n": 324,
+            "text": "      };"
+          },
+          {
+            "n": 325,
+            "text": "      Inputs.ClangTidyProvider = CTProvider;"
+          },
+          {
+            "n": 326,
+            "text": "      // Sigh, can't reuse the CompilerInvocation."
+          },
+          {
+            "n": 327,
+            "text": "      IgnoringDiagConsumer IgnoreDiags;"
+          },
+          {
+            "n": 328,
+            "text": "      auto Invocation = buildCompilerInvocation(Inputs, IgnoreDiags);"
+          },
+          {
+            "n": 329,
+            "text": "      Duration Val = Time([&] {"
+          },
+          {
+            "n": 330,
+            "text": "        ParsedAST::build(File, Inputs, std::move(Invocation), {}, Preamble);"
+          },
+          {
+            "n": 331,
+            "text": "      });"
+          },
+          {
+            "n": 332,
+            "text": "      vlog(\"    Measured {0} ==> {1}\", Checks, Val);"
+          },
+          {
+            "n": 333,
+            "text": "      return Val;"
+          },
+          {
+            "n": 371,
+            "text": "    // Restore old options."
+          },
+          {
+            "n": 372,
+            "text": "    Inputs.ClangTidyProvider = Opts.ClangTidyProvider;"
+          }
+        ]
+      }
+    ],
+    "after": [
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/tool/Check.cpp",
+        "rows": [
+          {
+            "n": 303,
+            "text": "  bool checkTidyTimes() {"
+          },
+          {
+            "n": 304,
+            "text": "    // Keep all other modules active while varying only tidy's configuration."
+          },
+          {
+            "n": 305,
+            "text": "    auto *TidyModule ="
+          },
+          {
+            "n": 306,
+            "text": "        Inputs.FeatureModules"
+          },
+          {
+            "n": 307,
+            "text": "            ? Inputs.FeatureModules->get<ClangTidyFeatureModule>()"
+          },
+          {
+            "n": 308,
+            "text": "            : nullptr;"
+          },
+          {
+            "n": 309,
+            "text": "    if (!TidyModule) {"
+          },
+          {
+            "n": 310,
+            "text": "      elog(\"Cannot time clang-tidy checks without a clang-tidy feature module\");"
+          },
+          {
+            "n": 311,
+            "text": "      return false;"
+          },
+          {
+            "n": 312,
+            "text": "    }"
+          },
+          {
+            "n": 333,
+            "text": "      TidyProvider CTProvider = [&](tidy::ClangTidyOptions &Opts,"
+          },
+          {
+            "n": 334,
+            "text": "                                    llvm::StringRef) {"
+          },
+          {
+            "n": 335,
+            "text": "        Opts.Checks = Checks.str();"
+          },
+          {
+            "n": 336,
+            "text": "      };"
+          },
+          {
+            "n": 337,
+            "text": "      auto Provider ="
+          },
+          {
+            "n": 338,
+            "text": "          std::make_shared<const TidyProvider>(std::move(CTProvider));"
+          },
+          {
+            "n": 339,
+            "text": "      TidyModule->swapProvider(Provider);"
+          },
+          {
+            "n": 340,
+            "text": "      // Provider now holds the original configuration; restore it on exit."
+          },
+          {
+            "n": 341,
+            "text": "      llvm::scope_exit RestoreProvider("
+          },
+          {
+            "n": 342,
+            "text": "          [&] { TidyModule->swapProvider(Provider); });"
+          },
+          {
+            "n": 343,
+            "text": "      // Sigh, can't reuse the CompilerInvocation."
+          },
+          {
+            "n": 344,
+            "text": "      IgnoringDiagConsumer IgnoreDiags;"
+          },
+          {
+            "n": 345,
+            "text": "      auto Invocation = buildCompilerInvocation(Inputs, IgnoreDiags);"
+          },
+          {
+            "n": 346,
+            "text": "      Duration Val = Time([&] {"
+          },
+          {
+            "n": 347,
+            "text": "        ParsedAST::build(File, Inputs, std::move(Invocation), {}, Preamble);"
+          },
+          {
+            "n": 348,
+            "text": "      });"
+          },
+          {
+            "n": 349,
+            "text": "      vlog(\"    Measured {0} ==> {1}\", Checks, Val);"
+          },
+          {
+            "n": 350,
+            "text": "      return Val;"
+          }
+        ]
+      }
+    ],
+    "notes": [
+      "Provider allocation and both swaps are outside the measured Time() block.",
+      "The local variable saves the original provider; scope exit restores it."
+    ],
+    "kind": "TIMING ADAPTER",
+    "height": 1131
+  },
+  {
+    "id": "13-testtu",
+    "title": "TestTU keeps the short test configuration",
+    "desc": "Tests may still assign TU.ClangTidyProvider. build() wraps it in a local module; inputs() only forwards explicit modules. ClangTidyProvider and FeatureModules are mutually exclusive in TestTU::build(). Mixed-module tests and direct inputs() callers use an explicit module set. This is a deliberate test-helper boundary.",
+    "before": [
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/unittests/TestTU.cpp",
+        "rows": [
+          {
+            "n": 73,
+            "text": "    FS.OverlayRealFileSystemForModules = true;"
+          },
+          {
+            "n": 74,
+            "text": "  Inputs.TFS = &FS;"
+          },
+          {
+            "n": 75,
+            "text": "  Inputs.Opts = ParseOptions();"
+          },
+          {
+            "n": 76,
+            "text": "  if (ClangTidyProvider)"
+          },
+          {
+            "n": 77,
+            "text": "    Inputs.ClangTidyProvider = ClangTidyProvider;"
+          },
+          {
+            "n": 78,
+            "text": "  Inputs.Index = ExternalIndex;"
+          },
+          {
+            "n": 79,
+            "text": "  return Inputs;"
+          },
+          {
+            "n": 115,
+            "text": "ParsedAST TestTU::build() const {"
+          },
+          {
+            "n": 116,
+            "text": "  MockFS FS;"
+          },
+          {
+            "n": 117,
+            "text": "  auto Inputs = inputs(FS);"
+          },
+          {
+            "n": 118,
+            "text": "  Inputs.Opts = ParseOpts;"
+          },
+          {
+            "n": 119,
+            "text": "  StoreDiags Diags;"
+          },
+          {
+            "n": 120,
+            "text": "  auto CI = buildCompilerInvocation(Inputs, Diags);"
+          }
+        ]
+      }
+    ],
+    "after": [
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/unittests/TestTU.cpp",
+        "rows": [
+          {
+            "n": 114,
+            "text": "ParsedAST TestTU::build() const {"
+          },
+          {
+            "n": 115,
+            "text": "  if (ClangTidyProvider && FeatureModules) {"
+          },
+          {
+            "n": 116,
+            "text": "    llvm::errs() << \"Use either ClangTidyProvider or FeatureModules\\n\";"
+          },
+          {
+            "n": 117,
+            "text": "    std::abort();"
+          },
+          {
+            "n": 118,
+            "text": "  }"
+          },
+          {
+            "n": 119,
+            "text": "  MockFS FS;"
+          },
+          {
+            "n": 120,
+            "text": "  auto Inputs = inputs(FS);"
+          },
+          {
+            "n": 121,
+            "text": "  Inputs.Opts = ParseOpts;"
+          },
+          {
+            "n": 122,
+            "text": "  FeatureModuleSet TidyModules;"
+          },
+          {
+            "n": 123,
+            "text": "  if (ClangTidyProvider) {"
+          },
+          {
+            "n": 124,
+            "text": "    TidyModules.add(std::make_unique<ClangTidyFeatureModule>("
+          },
+          {
+            "n": 125,
+            "text": "        [this](tidy::ClangTidyOptions &Opts, llvm::StringRef Filename) {"
+          },
+          {
+            "n": 126,
+            "text": "          ClangTidyProvider(Opts, Filename);"
+          },
+          {
+            "n": 127,
+            "text": "        }));"
+          },
+          {
+            "n": 128,
+            "text": "    Inputs.FeatureModules = &TidyModules;"
+          },
+          {
+            "n": 129,
+            "text": "  }"
+          },
+          {
+            "n": 130,
+            "text": "  StoreDiags Diags;"
+          },
+          {
+            "n": 131,
+            "text": "  auto CI = buildCompilerInvocation(Inputs, Diags);"
+          },
+          {
+            "n": 132,
+            "text": "  assert(CI && \"Failed to build compilation invocation.\");"
+          },
+          {
+            "n": 133,
+            "text": "  if (OverlayRealFileSystemForModules)"
+          }
+        ]
+      }
+    ],
+    "kind": "TEST HELPER ADAPTER",
+    "notes": [
+      "TU.ClangTidyProvider is a build()-only convenience adapter.",
+      "Mixed modules and direct inputs() calls use an explicit set; TestTU.h is unchanged."
+    ],
+    "height": 981
+  },
+  {
+    "id": "14-server-tests",
+    "title": "Server and LSP tests register a feature module",
+    "desc": "Tests embedding the server replace the removed options field with an explicitly constructed tidy module. The existing test inputs and assertions are retained; only setup changes. The LSP fixture already supplies its FeatureModuleSet to the server.",
+    "before": [
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/unittests/ClangdTests.cpp",
+        "rows": [
+          {
+            "n": 1228,
+            "text": "  TidyProvider Provider = combine(std::move(Stack));"
+          },
+          {
+            "n": 1229,
+            "text": "  CDB.ExtraClangFlags = {\"-xc++\"};"
+          },
+          {
+            "n": 1230,
+            "text": "  auto Opts = ClangdServer::optsForTest();"
+          },
+          {
+            "n": 1231,
+            "text": "  Opts.ClangTidyProvider = Provider;"
+          },
+          {
+            "n": 1232,
+            "text": "  ClangdServer Server(CDB, FS, Opts, &DiagConsumer);"
+          },
+          {
+            "n": 1233,
+            "text": "  const char *SourceContents = R\"cpp("
+          }
+        ]
+      },
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/unittests/ClangdLSPServerTests.cpp",
+        "rows": [
+          {
+            "n": 212,
+            "text": "                                        llvm::StringRef) {"
+          },
+          {
+            "n": 213,
+            "text": "    ClangTidyOpts.Checks = {\"-*,readability-identifier-naming\"};"
+          },
+          {
+            "n": 214,
+            "text": "    ClangTidyOpts.CheckOptions[\"readability-identifier-naming.FunctionCase\"] ="
+          },
+          {
+            "n": 215,
+            "text": "        \"CamelCase\";"
+          },
+          {
+            "n": 216,
+            "text": "  };"
+          },
+          {
+            "n": 217,
+            "text": "  Opts.ClangTidyProvider = ClangTidyProvider;"
+          },
+          {
+            "n": 218,
+            "text": "  auto &Client = start();"
+          },
+          {
+            "n": 219,
+            "text": "  Client.didOpen(\"foo.hpp\", Header.code());"
+          },
+          {
+            "n": 272,
+            "text": "                                        llvm::StringRef) {"
+          },
+          {
+            "n": 273,
+            "text": "    ClangTidyOpts.Checks = {\"-*,boost-use-ranges\"};"
+          },
+          {
+            "n": 274,
+            "text": "  };"
+          },
+          {
+            "n": 275,
+            "text": "  Opts.ClangTidyProvider = ClangTidyProvider;"
+          },
+          {
+            "n": 276,
+            "text": "  // Check that registering the boost-use-ranges checker's matchers"
+          },
+          {
+            "n": 277,
+            "text": "  // on two different threads does not cause a crash."
+          },
+          {
+            "n": 278,
+            "text": "  auto &Client = start();"
+          }
+        ]
+      }
+    ],
+    "after": [
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/unittests/ClangdTests.cpp",
+        "rows": [
+          {
+            "n": 1229,
+            "text": "  TidyProvider Provider = combine(std::move(Stack));"
+          },
+          {
+            "n": 1230,
+            "text": "  CDB.ExtraClangFlags = {\"-xc++\"};"
+          },
+          {
+            "n": 1231,
+            "text": "  auto Opts = ClangdServer::optsForTest();"
+          },
+          {
+            "n": 1232,
+            "text": "  FeatureModuleSet Modules;"
+          },
+          {
+            "n": 1233,
+            "text": "  Modules.add(std::make_unique<ClangTidyFeatureModule>(std::move(Provider)));"
+          },
+          {
+            "n": 1234,
+            "text": "  Opts.FeatureModules = &Modules;"
+          },
+          {
+            "n": 1235,
+            "text": "  ClangdServer Server(CDB, FS, Opts, &DiagConsumer);"
+          },
+          {
+            "n": 1236,
+            "text": "  const char *SourceContents = R\"cpp("
+          }
+        ]
+      },
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/unittests/ClangdLSPServerTests.cpp",
+        "rows": [
+          {
+            "n": 212,
+            "text": "  constexpr auto ClangTidyProvider = [](tidy::ClangTidyOptions &ClangTidyOpts,"
+          },
+          {
+            "n": 213,
+            "text": "                                        llvm::StringRef) {"
+          },
+          {
+            "n": 214,
+            "text": "    ClangTidyOpts.Checks = {\"-*,readability-identifier-naming\"};"
+          },
+          {
+            "n": 215,
+            "text": "    ClangTidyOpts.CheckOptions[\"readability-identifier-naming.FunctionCase\"] ="
+          },
+          {
+            "n": 216,
+            "text": "        \"CamelCase\";"
+          },
+          {
+            "n": 217,
+            "text": "  };"
+          },
+          {
+            "n": 218,
+            "text": "  FeatureModules.add("
+          },
+          {
+            "n": 219,
+            "text": "      std::make_unique<ClangTidyFeatureModule>(ClangTidyProvider));"
+          },
+          {
+            "n": 220,
+            "text": "  auto &Client = start();"
+          },
+          {
+            "n": 221,
+            "text": "  Client.didOpen(\"foo.hpp\", Header.code());"
+          },
+          {
+            "n": 273,
+            "text": "  constexpr auto ClangTidyProvider = [](tidy::ClangTidyOptions &ClangTidyOpts,"
+          },
+          {
+            "n": 274,
+            "text": "                                        llvm::StringRef) {"
+          },
+          {
+            "n": 275,
+            "text": "    ClangTidyOpts.Checks = {\"-*,boost-use-ranges\"};"
+          },
+          {
+            "n": 276,
+            "text": "  };"
+          },
+          {
+            "n": 277,
+            "text": "  FeatureModules.add("
+          },
+          {
+            "n": 278,
+            "text": "      std::make_unique<ClangTidyFeatureModule>(ClangTidyProvider));"
+          },
+          {
+            "n": 279,
+            "text": "  // Check that registering the boost-use-ranges checker's matchers"
+          },
+          {
+            "n": 280,
+            "text": "  // on two different threads does not cause a crash."
+          },
+          {
+            "n": 281,
+            "text": "  auto &Client = start();"
+          }
+        ]
+      }
+    ],
+    "kind": "TEST SETUP ADAPTERS",
+    "notes": [
+      "Tests embedding the server replace the removed options field with an explicitly constructed tidy module. The existing test inputs and assertions are retained; only setup changes. The LSP fixture already supplies its FeatureModuleSet to the server."
+    ],
+    "height": 1177
+  },
+  {
+    "id": "15-stays",
+    "title": "IncludeFixer and orchestration stay in the core",
+    "desc": "IncludeFixer stays in ParsedAST; colors show reindentation and rewrites within the same core file. Clang's typo-correction adjustment, include fixes, token collection and lifecycle dispatch remain in the core. Preamble.cpp and FeatureModule.h are unchanged; the existing lifecycle hooks are reused.",
+    "before": [
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/ParsedAST.cpp",
+        "rows": [
+          {
+            "n": 625,
+            "text": "    for (auto ID : {diag::ext_implicit_function_decl_c99,"
+          },
+          {
+            "n": 626,
+            "text": "                    diag::ext_implicit_lib_function_decl,"
+          },
+          {
+            "n": 627,
+            "text": "                    diag::ext_implicit_lib_function_decl_c99,"
+          },
+          {
+            "n": 628,
+            "text": "                    diag::warn_implicit_function_decl}) {"
+          },
+          {
+            "n": 629,
+            "text": "      OverriddenSeverity.try_emplace("
+          },
+          {
+            "n": 630,
+            "text": "          ID, Clang->getDiagnostics().getDiagnosticLevel(ID, SourceLocation()));"
+          },
+          {
+            "n": 631,
+            "text": "      Clang->getDiagnostics().setSeverity(ID, diag::Severity::Error,"
+          },
+          {
+            "n": 632,
+            "text": "                                          SourceLocation());"
+          },
+          {
+            "n": 633,
+            "text": "    }"
+          },
+          {
+            "n": 634,
+            "text": ""
+          },
+          {
+            "n": 635,
+            "text": "    ASTDiags.setLevelAdjuster([&](DiagnosticsEngine::Level DiagLevel,"
+          },
+          {
+            "n": 636,
+            "text": "                                  const clang::Diagnostic &Info) {"
+          },
+          {
+            "n": 637,
+            "text": "      auto It = OverriddenSeverity.find(Info.getID());"
+          },
+          {
+            "n": 638,
+            "text": "      if (It != OverriddenSeverity.end())"
+          },
+          {
+            "n": 639,
+            "text": "        DiagLevel = It->second;"
+          },
+          {
+            "n": 702,
+            "text": "      FixIncludes.emplace(Filename, Inserter, *Inputs.Index,"
+          },
+          {
+            "n": 703,
+            "text": "                          /*IndexRequestLimit=*/5, Directive);"
+          },
+          {
+            "n": 704,
+            "text": "      ASTDiags.contributeFixes([&FixIncludes](DiagnosticsEngine::Level DiagLevl,"
+          },
+          {
+            "n": 705,
+            "text": "                                              const clang::Diagnostic &Info) {"
+          },
+          {
+            "n": 706,
+            "text": "        return FixIncludes->fix(DiagLevl, Info);"
+          },
+          {
+            "n": 707,
+            "text": "      });"
+          },
+          {
+            "n": 708,
+            "text": "      Clang->setExternalSemaSource(FixIncludes->unresolvedNameRecorder());"
+          },
+          {
+            "n": 776,
+            "text": "  std::vector<Decl *> ParsedDecls = Action->takeTopLevelDecls();"
+          },
+          {
+            "n": 777,
+            "text": "  // AST traversals should exclude the preamble, to avoid performance cliffs."
+          },
+          {
+            "n": 778,
+            "text": "  Clang->getASTContext().setTraversalScope(ParsedDecls);"
+          },
+          {
+            "n": 779,
+            "text": "  if (!CTChecks.empty()) {"
+          },
+          {
+            "n": 780,
+            "text": "    // Run the AST-dependent part of the clang-tidy checks."
+          },
+          {
+            "n": 781,
+            "text": "    // (The preprocessor part ran already, via PPCallbacks)."
+          },
+          {
+            "n": 782,
+            "text": "    trace::Span Tracer(\"ClangTidyMatch\");"
+          },
+          {
+            "n": 783,
+            "text": "    CTFinder.matchAST(Clang->getASTContext());"
+          },
+          {
+            "n": 784,
+            "text": "  }"
+          },
+          {
+            "n": 785,
+            "text": "  for (const auto &L : ASTListeners)"
+          },
+          {
+            "n": 786,
+            "text": "    L->afterExecute(*Clang);"
+          },
+          {
+            "n": 787,
+            "text": ""
+          }
+        ]
+      }
+    ],
+    "after": [
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/ParsedAST.cpp",
+        "rows": [
+          {
+            "n": 395,
+            "text": "  // Clang only corrects typos for use of undeclared functions in C if that"
+          },
+          {
+            "n": 396,
+            "text": "  // use is an error. Include fixer relies on typo correction, so pretend"
+          },
+          {
+            "n": 397,
+            "text": "  // this is an error. (The actual typo correction is nice too)."
+          },
+          {
+            "n": 398,
+            "text": "  // We restore the original severity in the level adjuster."
+          },
+          {
+            "n": 399,
+            "text": "  // FIXME: It would be better to have a real API for this, but what?"
+          },
+          {
+            "n": 400,
+            "text": "  for (auto ID : {diag::ext_implicit_function_decl_c99,"
+          },
+          {
+            "n": 401,
+            "text": "                  diag::ext_implicit_lib_function_decl,"
+          },
+          {
+            "n": 402,
+            "text": "                  diag::ext_implicit_lib_function_decl_c99,"
+          },
+          {
+            "n": 403,
+            "text": "                  diag::warn_implicit_function_decl}) {"
+          },
+          {
+            "n": 404,
+            "text": "    OverriddenSeverity.try_emplace("
+          },
+          {
+            "n": 405,
+            "text": "        ID, Clang->getDiagnostics().getDiagnosticLevel(ID, SourceLocation()));"
+          },
+          {
+            "n": 406,
+            "text": "    Clang->getDiagnostics().setSeverity(ID, diag::Severity::Error,"
+          },
+          {
+            "n": 407,
+            "text": "                                        SourceLocation());"
+          },
+          {
+            "n": 408,
+            "text": "  }"
+          },
+          {
+            "n": 409,
+            "text": "  ASTDiags.setLevelAdjuster("
+          },
+          {
+            "n": 410,
+            "text": "      [&](DiagnosticsEngine::Level Level, const clang::Diagnostic &Info) {"
+          },
+          {
+            "n": 411,
+            "text": "        auto It = OverriddenSeverity.find(Info.getID());"
+          },
+          {
+            "n": 412,
+            "text": "        return It == OverriddenSeverity.end() ? Level : It->second;"
+          },
+          {
+            "n": 413,
+            "text": "      });"
+          },
+          {
+            "n": 430,
+            "text": "    // FIXME: Consider piping through ASTSignals to fetch this to handle the"
+          },
+          {
+            "n": 431,
+            "text": "    // case where a header file contains ObjC decls but no #imports."
+          },
+          {
+            "n": 432,
+            "text": "    Symbol::IncludeDirective Directive ="
+          },
+          {
+            "n": 433,
+            "text": "        Inputs.Opts.ImportInsertions"
+          },
+          {
+            "n": 434,
+            "text": "            ? preferredIncludeDirective(Filename, Clang->getLangOpts(),"
+          },
+          {
+            "n": 435,
+            "text": "                                        MainFileIncludes, {})"
+          },
+          {
+            "n": 436,
+            "text": "            : Symbol::Include;"
+          },
+          {
+            "n": 437,
+            "text": "    FixIncludes.emplace(Filename, Inserter, *Inputs.Index,"
+          },
+          {
+            "n": 438,
+            "text": "                        /*IndexRequestLimit=*/5, Directive);"
+          },
+          {
+            "n": 439,
+            "text": "    ASTDiags.contributeFixes([&FixIncludes](DiagnosticsEngine::Level Level,"
+          },
+          {
+            "n": 440,
+            "text": "                                            const clang::Diagnostic &Info) {"
+          },
+          {
+            "n": 441,
+            "text": "      return FixIncludes->fix(Level, Info);"
+          },
+          {
+            "n": 442,
+            "text": "    });"
+          },
+          {
+            "n": 443,
+            "text": "    Clang->setExternalSemaSource(FixIncludes->unresolvedNameRecorder());"
+          },
+          {
+            "n": 444,
+            "text": "  }"
+          },
+          {
+            "n": 507,
+            "text": "  syntax::TokenBuffer Tokens = std::move(CollectTokens).consume();"
+          },
+          {
+            "n": 508,
+            "text": "  // Makes SelectionTree build much faster."
+          },
+          {
+            "n": 509,
+            "text": "  Tokens.indexExpandedTokens();"
+          },
+          {
+            "n": 510,
+            "text": "  std::vector<Decl *> ParsedDecls = Action->takeTopLevelDecls();"
+          },
+          {
+            "n": 511,
+            "text": "  // AST traversals should exclude the preamble, to avoid performance cliffs."
+          },
+          {
+            "n": 512,
+            "text": "  Clang->getASTContext().setTraversalScope(ParsedDecls);"
+          },
+          {
+            "n": 513,
+            "text": "  for (const auto &L : ASTListeners)"
+          },
+          {
+            "n": 514,
+            "text": "    L->afterExecute(*Clang);"
+          }
+        ]
+      }
+    ],
+    "kind": "STAYS IN CORE",
+    "notes": [
+      "IncludeFixer and typo-correction severity handling remain in the core.",
+      "Frontend execution, token collection, traversal restriction and lifecycle dispatch remain in place."
+    ],
+    "height": 1509
+  },
+  {
+    "id": "16-build-tests",
+    "title": "Existing regressions are reused, not re-added",
+    "desc": "The parent already contains the zero-check, warning-option, relative-input and consumer-initialization tests. The migration adapts their setup.",
+    "before": [
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/unittests/DiagnosticsTests.cpp",
+        "rows": [
+          {
+            "n": 831,
+            "text": "TEST(DiagnosticTest, ClangTidyCompilerWarningsWithoutChecks) {"
+          },
+          {
+            "n": 832,
+            "text": "  auto TU = TestTU::withCode(\"static void foo() {}\");"
+          },
+          {
+            "n": 833,
+            "text": "  TU.ClangTidyProvider = [](tidy::ClangTidyOptions &Opts, llvm::StringRef) {"
+          },
+          {
+            "n": 834,
+            "text": "    Opts.Checks = \"-*,clang-diagnostic-*\";"
+          },
+          {
+            "n": 835,
+            "text": "    Opts.ExtraArgs = {\"-Wunused-function\"};"
+          },
+          {
+            "n": 836,
+            "text": "    Opts.WarningsAsErrors = \"clang-diagnostic-unused-function\";"
+          },
+          {
+            "n": 837,
+            "text": "  };"
+          },
+          {
+            "n": 838,
+            "text": "  auto Warning = AllOf(diagName(\"-Wunused-function\"), diagSource(Diag::Clang),"
+          },
+          {
+            "n": 839,
+            "text": "                       diagSeverity(DiagnosticsEngine::Warning));"
+          },
+          {
+            "n": 840,
+            "text": "  EXPECT_THAT(TU.build().getDiagnostics(), ElementsAre(Warning));"
+          },
+          {
+            "n": 841,
+            "text": ""
+          },
+          {
+            "n": 842,
+            "text": "  // Without tidy checks, NOLINT and WarningsAsErrors don't affect warnings."
+          },
+          {
+            "n": 843,
+            "text": "  TU.Code = \"static void foo() {} // NOLINT(clang-diagnostic-unused-function)\";"
+          },
+          {
+            "n": 844,
+            "text": "  EXPECT_THAT(TU.build().getDiagnostics(), ElementsAre(Warning));"
+          },
+          {
+            "n": 845,
+            "text": "}"
+          }
+        ]
+      },
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/unittests/DiagnosticsTests.cpp",
+        "rows": [
+          {
+            "n": 847,
+            "text": "TEST(DiagnosticTest, ClangTidyWarningOptionsBeforeBeginSourceFile) {"
+          },
+          {
+            "n": 848,
+            "text": "  auto Build = [](bool Suppress, bool ExtraArgsBefore) {"
+          },
+          {
+            "n": 849,
+            "text": "    auto TU = TestTU::withCode(\"int value;\");"
+          },
+          {
+            "n": 850,
+            "text": "    TU.ClangTidyProvider = [=](tidy::ClangTidyOptions &Opts, llvm::StringRef) {"
+          },
+          {
+            "n": 851,
+            "text": "      Opts.Checks = \"-*\";"
+          },
+          {
+            "n": 852,
+            "text": "      if (Suppress) {"
+          },
+          {
+            "n": 853,
+            "text": "        auto &Args = ExtraArgsBefore ? Opts.ExtraArgsBefore : Opts.ExtraArgs;"
+          },
+          {
+            "n": 854,
+            "text": "        Args = {\"-Wno-incomplete-umbrella\"};"
+          },
+          {
+            "n": 855,
+            "text": "      }"
+          },
+          {
+            "n": 856,
+            "text": "    };"
+          },
+          {
+            "n": 857,
+            "text": "    TU.ExtraArgs = {\"-fmodules\","
+          },
+          {
+            "n": 858,
+            "text": "                    \"-fmodule-map-file=\" + testPath(\"module.modulemap\")};"
+          },
+          {
+            "n": 859,
+            "text": "    TU.AdditionalFiles[\"module.modulemap\"] ="
+          }
+        ]
+      }
+    ],
+    "after": [
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/unittests/DiagnosticsTests.cpp",
+        "rows": [
+          {
+            "n": 832,
+            "text": "TEST(DiagnosticTest, ClangTidyCompilerWarningsWithoutChecks) {"
+          },
+          {
+            "n": 833,
+            "text": "  auto TU = TestTU::withCode(\"static void foo() {}\");"
+          },
+          {
+            "n": 834,
+            "text": "  TU.ClangTidyProvider = [](tidy::ClangTidyOptions &Opts, llvm::StringRef) {"
+          },
+          {
+            "n": 835,
+            "text": "    Opts.Checks = \"-*,clang-diagnostic-*\";"
+          },
+          {
+            "n": 836,
+            "text": "    Opts.ExtraArgs = {\"-Wunused-function\"};"
+          },
+          {
+            "n": 837,
+            "text": "    Opts.WarningsAsErrors = \"clang-diagnostic-unused-function\";"
+          },
+          {
+            "n": 838,
+            "text": "  };"
+          },
+          {
+            "n": 839,
+            "text": "  auto Warning = AllOf(diagName(\"-Wunused-function\"), diagSource(Diag::Clang),"
+          },
+          {
+            "n": 840,
+            "text": "                       diagSeverity(DiagnosticsEngine::Warning));"
+          },
+          {
+            "n": 841,
+            "text": "  EXPECT_THAT(TU.build().getDiagnostics(), ElementsAre(Warning));"
+          },
+          {
+            "n": 842,
+            "text": ""
+          },
+          {
+            "n": 843,
+            "text": "  // Without tidy checks, NOLINT and WarningsAsErrors don't affect warnings."
+          },
+          {
+            "n": 844,
+            "text": "  TU.Code = \"static void foo() {} // NOLINT(clang-diagnostic-unused-function)\";"
+          },
+          {
+            "n": 845,
+            "text": "  EXPECT_THAT(TU.build().getDiagnostics(), ElementsAre(Warning));"
+          },
+          {
+            "n": 846,
+            "text": "}"
+          }
+        ]
+      },
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/unittests/DiagnosticsTests.cpp",
+        "rows": [
+          {
+            "n": 848,
+            "text": "TEST(DiagnosticTest, ClangTidyWarningOptionsBeforeBeginSourceFile) {"
+          },
+          {
+            "n": 849,
+            "text": "  auto Build = [](bool Suppress, bool ExtraArgsBefore) {"
+          },
+          {
+            "n": 850,
+            "text": "    auto TU = TestTU::withCode(\"int value;\");"
+          },
+          {
+            "n": 851,
+            "text": "    FeatureModuleSet Modules;"
+          },
+          {
+            "n": 852,
+            "text": "    Modules.add(std::make_unique<ClangTidyFeatureModule>("
+          },
+          {
+            "n": 853,
+            "text": "        [=](tidy::ClangTidyOptions &Opts, llvm::StringRef) {"
+          },
+          {
+            "n": 854,
+            "text": "          Opts.Checks = \"-*\";"
+          },
+          {
+            "n": 855,
+            "text": "          if (Suppress) {"
+          },
+          {
+            "n": 856,
+            "text": "            auto &Args ="
+          },
+          {
+            "n": 857,
+            "text": "                ExtraArgsBefore ? Opts.ExtraArgsBefore : Opts.ExtraArgs;"
+          },
+          {
+            "n": 858,
+            "text": "            Args = {\"-Wno-incomplete-umbrella\"};"
+          },
+          {
+            "n": 859,
+            "text": "          }"
+          },
+          {
+            "n": 860,
+            "text": "        }));"
+          },
+          {
+            "n": 861,
+            "text": "    TU.FeatureModules = &Modules;"
+          },
+          {
+            "n": 862,
+            "text": "    TU.ExtraArgs = {\"-fmodules\","
+          },
+          {
+            "n": 863,
+            "text": "                    \"-fmodule-map-file=\" + testPath(\"module.modulemap\")};"
+          },
+          {
+            "n": 864,
+            "text": "    TU.AdditionalFiles[\"module.modulemap\"] ="
+          }
+        ]
+      }
+    ],
+    "notes": [
+      "Gray code is baseline coverage, not tests added by this migration.",
+      "Direct inputs() tests construct an explicit module; build() retains its short provider adapter."
+    ],
+    "kind": "TEST SETUP ADAPTERS",
+    "height": 1265
+  },
+  {
+    "id": "17-paths-provider",
+    "title": "Filename identity and temporary provider overrides",
+    "desc": "Relative-input coverage already exists in the parent; its provider is wired through a module. The provider-swap regression is new.",
+    "before": [
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/unittests/DiagnosticsTests.cpp",
+        "rows": [
+          {
+            "n": 879,
+            "text": "TEST(DiagnosticTest, ClangTidyRelativeInput) {"
+          },
+          {
+            "n": 880,
+            "text": "  if (!CLANGD_TIDY_CHECKS)"
+          },
+          {
+            "n": 881,
+            "text": "    GTEST_SKIP() << \"Requires clang-tidy checks\";"
+          },
+          {
+            "n": 882,
+            "text": "  MockFS FS;"
+          },
+          {
+            "n": 883,
+            "text": "  auto TU = TestTU::withCode(\"int *p = 0;\");"
+          },
+          {
+            "n": 884,
+            "text": "  TU.Filename = \"project/src/test.cpp\";"
+          },
+          {
+            "n": 885,
+            "text": "  TU.AdditionalFiles[\"project/src/.clang-tidy\"] ="
+          },
+          {
+            "n": 886,
+            "text": "      \"Checks: '-*,modernize-use-nullptr'\";"
+          },
+          {
+            "n": 887,
+            "text": "  auto Provider = provideClangTidyFiles(FS);"
+          },
+          {
+            "n": 888,
+            "text": "  TU.ClangTidyProvider = [&](tidy::ClangTidyOptions &Opts,"
+          },
+          {
+            "n": 889,
+            "text": "                             llvm::StringRef Filename) {"
+          },
+          {
+            "n": 890,
+            "text": "    EXPECT_EQ(Filename, testPath(TU.Filename));"
+          },
+          {
+            "n": 891,
+            "text": "    Provider(Opts, Filename);"
+          },
+          {
+            "n": 892,
+            "text": "  };"
+          },
+          {
+            "n": 893,
+            "text": "  auto Inputs = TU.inputs(FS);"
+          },
+          {
+            "n": 894,
+            "text": "  Inputs.CompileCommand.Directory = testPath(\"project\");"
+          },
+          {
+            "n": 895,
+            "text": "  // Configuration lookup must use the requested file, not the frontend input."
+          },
+          {
+            "n": 896,
+            "text": "  for (const auto *InputFile : {\"src/./test.cpp\", \"../other/test.cpp\"}) {"
+          },
+          {
+            "n": 897,
+            "text": "    SCOPED_TRACE(InputFile);"
+          },
+          {
+            "n": 898,
+            "text": "    IgnoringDiagConsumer Diags;"
+          },
+          {
+            "n": 899,
+            "text": "    auto CI = buildCompilerInvocation(Inputs, Diags);"
+          },
+          {
+            "n": 900,
+            "text": "    ASSERT_TRUE(CI);"
+          },
+          {
+            "n": 901,
+            "text": "    auto Kind = CI->getFrontendOpts().Inputs.front().getKind();"
+          },
+          {
+            "n": 902,
+            "text": "    CI->getFrontendOpts().Inputs = {FrontendInputFile(InputFile, Kind)};"
+          },
+          {
+            "n": 903,
+            "text": "    auto AST = ParsedAST::build(testPath(TU.Filename), Inputs, std::move(CI),"
+          },
+          {
+            "n": 904,
+            "text": "                                {}, nullptr);"
+          },
+          {
+            "n": 905,
+            "text": "    ASSERT_TRUE(AST);"
+          },
+          {
+            "n": 906,
+            "text": "    ASSERT_THAT(AST->getDiagnostics(), SizeIs(1));"
+          },
+          {
+            "n": 907,
+            "text": "    EXPECT_EQ(AST->getDiagnostics().front().Name, \"modernize-use-nullptr\");"
+          },
+          {
+            "n": 908,
+            "text": "  }"
+          },
+          {
+            "n": 909,
+            "text": "}"
+          }
+        ]
+      }
+    ],
+    "after": [
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/unittests/DiagnosticsTests.cpp",
+        "rows": [
+          {
+            "n": 884,
+            "text": "TEST(DiagnosticTest, ClangTidyRelativeInput) {"
+          },
+          {
+            "n": 885,
+            "text": "  if (!CLANGD_TIDY_CHECKS)"
+          },
+          {
+            "n": 886,
+            "text": "    GTEST_SKIP() << \"Requires clang-tidy checks\";"
+          },
+          {
+            "n": 887,
+            "text": "  MockFS FS;"
+          },
+          {
+            "n": 888,
+            "text": "  auto TU = TestTU::withCode(\"int *p = 0;\");"
+          },
+          {
+            "n": 889,
+            "text": "  TU.Filename = \"project/src/test.cpp\";"
+          },
+          {
+            "n": 890,
+            "text": "  TU.AdditionalFiles[\"project/src/.clang-tidy\"] ="
+          },
+          {
+            "n": 891,
+            "text": "      \"Checks: '-*,modernize-use-nullptr'\";"
+          },
+          {
+            "n": 892,
+            "text": "  auto Provider = provideClangTidyFiles(FS);"
+          },
+          {
+            "n": 893,
+            "text": "  FeatureModuleSet Modules;"
+          },
+          {
+            "n": 894,
+            "text": "  Modules.add(std::make_unique<ClangTidyFeatureModule>("
+          },
+          {
+            "n": 895,
+            "text": "      [&](tidy::ClangTidyOptions &Opts, llvm::StringRef Filename) {"
+          },
+          {
+            "n": 896,
+            "text": "        EXPECT_EQ(Filename, testPath(TU.Filename));"
+          },
+          {
+            "n": 897,
+            "text": "        Provider(Opts, Filename);"
+          },
+          {
+            "n": 898,
+            "text": "      }));"
+          },
+          {
+            "n": 899,
+            "text": "  TU.FeatureModules = &Modules;"
+          },
+          {
+            "n": 900,
+            "text": "  auto Inputs = TU.inputs(FS);"
+          },
+          {
+            "n": 901,
+            "text": "  Inputs.CompileCommand.Directory = testPath(\"project\");"
+          },
+          {
+            "n": 902,
+            "text": "  // Configuration lookup must use the requested file, not the frontend input."
+          },
+          {
+            "n": 903,
+            "text": "  for (const auto *InputFile : {\"src/./test.cpp\", \"../other/test.cpp\"}) {"
+          },
+          {
+            "n": 904,
+            "text": "    SCOPED_TRACE(InputFile);"
+          },
+          {
+            "n": 905,
+            "text": "    IgnoringDiagConsumer Diags;"
+          },
+          {
+            "n": 906,
+            "text": "    auto CI = buildCompilerInvocation(Inputs, Diags);"
+          },
+          {
+            "n": 907,
+            "text": "    ASSERT_TRUE(CI);"
+          },
+          {
+            "n": 908,
+            "text": "    auto Kind = CI->getFrontendOpts().Inputs.front().getKind();"
+          },
+          {
+            "n": 909,
+            "text": "    CI->getFrontendOpts().Inputs = {FrontendInputFile(InputFile, Kind)};"
+          },
+          {
+            "n": 910,
+            "text": "    auto AST = ParsedAST::build(testPath(TU.Filename), Inputs, std::move(CI),"
+          },
+          {
+            "n": 911,
+            "text": "                                {}, nullptr);"
+          },
+          {
+            "n": 912,
+            "text": "    ASSERT_TRUE(AST);"
+          },
+          {
+            "n": 913,
+            "text": "    ASSERT_THAT(AST->getDiagnostics(), SizeIs(1));"
+          },
+          {
+            "n": 914,
+            "text": "    EXPECT_EQ(AST->getDiagnostics().front().Name, \"modernize-use-nullptr\");"
+          },
+          {
+            "n": 915,
+            "text": "  }"
+          },
+          {
+            "n": 916,
+            "text": "}"
+          }
+        ]
+      },
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/unittests/FeatureModulesTests.cpp",
+        "rows": [
+          {
+            "n": 310,
+            "text": "TEST(FeatureModulesTest, ClangTidyTemporaryProvider) {"
+          },
+          {
+            "n": 311,
+            "text": "  if (!CLANGD_TIDY_CHECKS)"
+          },
+          {
+            "n": 312,
+            "text": "    GTEST_SKIP() << \"Requires clang-tidy checks\";"
+          },
+          {
+            "n": 313,
+            "text": "  FeatureModuleSet Modules;"
+          },
+          {
+            "n": 314,
+            "text": "  Modules.add(std::make_unique<ClangTidyFeatureModule>("
+          },
+          {
+            "n": 315,
+            "text": "      addTidyChecks(\"modernize-use-nullptr\")));"
+          },
+          {
+            "n": 316,
+            "text": "  auto TU = TestTU::withCode(\"int *p = 0;\");"
+          },
+          {
+            "n": 317,
+            "text": "  TU.FeatureModules = &Modules;"
+          },
+          {
+            "n": 318,
+            "text": "  auto *Tidy = Modules.get<ClangTidyFeatureModule>();"
+          },
+          {
+            "n": 319,
+            "text": "  auto Provider = std::make_shared<const TidyProvider>(addTidyChecks(\"-*\"));"
+          },
+          {
+            "n": 320,
+            "text": "  // Check-mode timing temporarily overrides tidy's configuration, then"
+          },
+          {
+            "n": 321,
+            "text": "  // restores the original provider for subsequent builds."
+          },
+          {
+            "n": 322,
+            "text": "  Tidy->swapProvider(Provider);"
+          },
+          {
+            "n": 323,
+            "text": "  EXPECT_THAT(TU.build().getDiagnostics(), testing::IsEmpty());"
+          },
+          {
+            "n": 324,
+            "text": "  Tidy->swapProvider(Provider);"
+          },
+          {
+            "n": 325,
+            "text": "  auto AST = TU.build();"
+          },
+          {
+            "n": 326,
+            "text": "  ASSERT_THAT(AST.getDiagnostics(), testing::SizeIs(1));"
+          },
+          {
+            "n": 327,
+            "text": "  EXPECT_EQ(AST.getDiagnostics().front().Name, \"modernize-use-nullptr\");"
+          },
+          {
+            "n": 328,
+            "text": "}"
+          }
+        ]
+      }
+    ],
+    "notes": [
+      "Lookup uses the requested document identity even when the frontend input name differs.",
+      "The new swap test disables checks, restores the provider, and checks the original diagnostic."
+    ],
+    "kind": "ADAPT + ONE NEW TEST",
+    "height": 1681
+  },
+  {
+    "id": "18-diagnostic-build",
+    "title": "CMake and GN compile the new module",
+    "desc": "Both build descriptions add the same ClangTidyFeatureModule.cpp source. No lit test is introduced by this commit.",
+    "before": [
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/CMakeLists.txt",
+        "rows": [
+          {
+            "n": 66,
+            "text": "  ASTSignals.cpp"
+          },
+          {
+            "n": 67,
+            "text": "  ClangdLSPServer.cpp"
+          },
+          {
+            "n": 68,
+            "text": "  ClangdServer.cpp"
+          },
+          {
+            "n": 69,
+            "text": "  CodeComplete.cpp"
+          },
+          {
+            "n": 70,
+            "text": "  CodeCompletionStrings.cpp"
+          },
+          {
+            "n": 71,
+            "text": "  CollectMacros.cpp"
+          }
+        ]
+      },
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "llvm/utils/gn/secondary/clang-tools-extra/clangd/BUILD.gn",
+        "rows": [
+          {
+            "n": 82,
+            "text": "    \"ASTSignals.cpp\","
+          },
+          {
+            "n": 83,
+            "text": "    \"ClangdLSPServer.cpp\","
+          },
+          {
+            "n": 84,
+            "text": "    \"ClangdServer.cpp\","
+          },
+          {
+            "n": 85,
+            "text": "    \"CodeComplete.cpp\","
+          },
+          {
+            "n": 86,
+            "text": "    \"CodeCompletionStrings.cpp\","
+          },
+          {
+            "n": 87,
+            "text": "    \"CollectMacros.cpp\","
+          }
+        ]
+      }
+    ],
+    "after": [
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/CMakeLists.txt",
+        "rows": [
+          {
+            "n": 66,
+            "text": "  ASTSignals.cpp"
+          },
+          {
+            "n": 67,
+            "text": "  ClangdLSPServer.cpp"
+          },
+          {
+            "n": 68,
+            "text": "  ClangdServer.cpp"
+          },
+          {
+            "n": 69,
+            "text": "  ClangTidyFeatureModule.cpp"
+          },
+          {
+            "n": 70,
+            "text": "  CodeComplete.cpp"
+          },
+          {
+            "n": 71,
+            "text": "  CodeCompletionStrings.cpp"
+          },
+          {
+            "n": 72,
+            "text": "  CollectMacros.cpp"
+          }
+        ]
+      },
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "llvm/utils/gn/secondary/clang-tools-extra/clangd/BUILD.gn",
+        "rows": [
+          {
+            "n": 82,
+            "text": "    \"ASTSignals.cpp\","
+          },
+          {
+            "n": 83,
+            "text": "    \"ClangdLSPServer.cpp\","
+          },
+          {
+            "n": 84,
+            "text": "    \"ClangdServer.cpp\","
+          },
+          {
+            "n": 85,
+            "text": "    \"ClangTidyFeatureModule.cpp\","
+          },
+          {
+            "n": 86,
+            "text": "    \"CodeComplete.cpp\","
+          },
+          {
+            "n": 87,
+            "text": "    \"CodeCompletionStrings.cpp\","
+          },
+          {
+            "n": 88,
+            "text": "    \"CollectMacros.cpp\","
+          }
+        ]
+      }
+    ],
+    "notes": [
+      "The removed check-tidy-time lit test is not part of the migration.",
+      "Timing with ordinary clang-tidy disabled is no longer preserved."
+    ],
+    "kind": "BUILD WIRING",
+    "height": 845
+  },
+  {
+    "id": "19-comments",
+    "title": "Code moves together with its original comments",
+    "desc": "Original explanatory comments and existing FIXMEs move with their code. Comment wording is preserved, allowing indentation and line wrapping changes. New adapter comments are separate.",
+    "before": [
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/ParsedAST.cpp",
+        "rows": [
+          {
+            "n": 287,
+            "text": "// Filter for clang diagnostics groups enabled by CTOptions.Checks."
+          },
+          {
+            "n": 288,
+            "text": "//"
+          },
+          {
+            "n": 289,
+            "text": "// These are check names like clang-diagnostics-unused."
+          },
+          {
+            "n": 290,
+            "text": "// Note that unlike -Wunused, clang-diagnostics-unused does not imply"
+          },
+          {
+            "n": 291,
+            "text": "// subcategories like clang-diagnostics-unused-function."
+          },
+          {
+            "n": 292,
+            "text": "//"
+          },
+          {
+            "n": 293,
+            "text": "// This is used to determine which diagnostics can be enabled by ExtraArgs in"
+          },
+          {
+            "n": 294,
+            "text": "// the clang-tidy configuration."
+          },
+          {
+            "n": 295,
+            "text": "class TidyDiagnosticGroups {"
+          }
+        ]
+      },
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/ParsedAST.cpp",
+        "rows": [
+          {
+            "n": 519,
+            "text": "    // If clang-tidy is configured to emit clang warnings, we should too."
+          },
+          {
+            "n": 520,
+            "text": "    //"
+          },
+          {
+            "n": 521,
+            "text": "    // Such clang-tidy configuration consists of two parts:"
+          },
+          {
+            "n": 522,
+            "text": "    //   - ExtraArgs: [\"-Wfoo\"] causes clang to produce the warnings"
+          },
+          {
+            "n": 523,
+            "text": "    //   - Checks: \"clang-diagnostic-foo\" prevents clang-tidy filtering them out"
+          },
+          {
+            "n": 524,
+            "text": "    //"
+          },
+          {
+            "n": 525,
+            "text": "    // In clang-tidy, diagnostics are emitted if they pass both checks."
+          },
+          {
+            "n": 526,
+            "text": "    // When groups contain subgroups, -Wparent includes the child, but"
+          },
+          {
+            "n": 527,
+            "text": "    // clang-diagnostic-parent does not."
+          },
+          {
+            "n": 528,
+            "text": "    //"
+          },
+          {
+            "n": 529,
+            "text": "    // We *don't* want to change the compile command directly. This can have"
+          },
+          {
+            "n": 530,
+            "text": "    // too many unexpected effects: breaking the command, interactions with"
+          },
+          {
+            "n": 531,
+            "text": "    // -- and -Werror, etc. Besides, we've already parsed the command."
+          },
+          {
+            "n": 532,
+            "text": "    // Instead we parse the -W<group> flags and handle them directly."
+          },
+          {
+            "n": 533,
+            "text": "    //"
+          },
+          {
+            "n": 534,
+            "text": "    // Similarly, we don't want to use Checks to filter clang diagnostics after"
+          },
+          {
+            "n": 535,
+            "text": "    // they are generated, as this spreads clang-tidy emulation everywhere."
+          },
+          {
+            "n": 536,
+            "text": "    // Instead, we just use these to filter which extra diagnostics we enable."
+          },
+          {
+            "n": 537,
+            "text": "    auto &Diags = Clang->getDiagnostics();"
+          },
+          {
+            "n": 538,
+            "text": "    TidyDiagnosticGroups TidyGroups(ClangTidyOpts.Checks ? *ClangTidyOpts.Checks"
+          },
+          {
+            "n": 539,
+            "text": "                                                         : llvm::StringRef());"
+          }
+        ]
+      },
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/ParsedAST.cpp",
+        "rows": [
+          {
+            "n": 566,
+            "text": "  // Set up ClangTidy. Must happen after BeginSourceFile() so ASTContext exists."
+          },
+          {
+            "n": 567,
+            "text": "  // Clang-tidy has some limitations to ensure reasonable performance:"
+          },
+          {
+            "n": 568,
+            "text": "  //  - checks don't see all preprocessor events in the preamble"
+          },
+          {
+            "n": 569,
+            "text": "  //  - matchers run only over the main-file top-level decls (and can't see"
+          },
+          {
+            "n": 570,
+            "text": "  //    ancestors outside this scope)."
+          },
+          {
+            "n": 571,
+            "text": "  // In practice almost all checks work well without modifications."
+          },
+          {
+            "n": 572,
+            "text": "  std::vector<std::unique_ptr<tidy::ClangTidyCheck>> CTChecks;"
+          }
+        ]
+      },
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/ParsedAST.cpp",
+        "rows": [
+          {
+            "n": 383,
+            "text": "    if (NeedsWerrorExclusion) {"
+          },
+          {
+            "n": 384,
+            "text": "      // FIXME: there's no API to suppress -Werror for single diagnostics."
+          },
+          {
+            "n": 385,
+            "text": "      // In some cases with sub-groups, we may end up erroneously"
+          },
+          {
+            "n": 386,
+            "text": "      // downgrading diagnostics that were -Werror in the compile command."
+          },
+          {
+            "n": 387,
+            "text": "      Diags.setDiagnosticGroupWarningAsError(Group, false);"
+          }
+        ]
+      },
+      {
+        "rev": "101584320859c12c84929443136e9deb54de544a",
+        "file": "clang-tools-extra/clangd/Diagnostics.cpp",
+        "rows": [
+          {
+            "n": 608,
+            "text": "        // clang-tidy bakes the name into diagnostic messages. Strip it out."
+          },
+          {
+            "n": 609,
+            "text": "        // It would be much nicer to make clang-tidy not do this."
+          },
+          {
+            "n": 610,
+            "text": "        auto CleanMessage = [&](std::string &Msg) {"
+          }
+        ]
+      }
+    ],
+    "after": [
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/ClangTidyFeatureModule.cpp",
+        "rows": [
+          {
+            "n": 56,
+            "text": "// Filter for clang diagnostics groups enabled by CTOptions.Checks."
+          },
+          {
+            "n": 57,
+            "text": "//"
+          },
+          {
+            "n": 58,
+            "text": "// These are check names like clang-diagnostics-unused."
+          },
+          {
+            "n": 59,
+            "text": "// Note that unlike -Wunused, clang-diagnostics-unused does not imply"
+          },
+          {
+            "n": 60,
+            "text": "// subcategories like clang-diagnostics-unused-function."
+          },
+          {
+            "n": 61,
+            "text": "//"
+          },
+          {
+            "n": 62,
+            "text": "// This is used to determine which diagnostics can be enabled by ExtraArgs in"
+          },
+          {
+            "n": 63,
+            "text": "// the clang-tidy configuration."
+          },
+          {
+            "n": 64,
+            "text": "class TidyDiagnosticGroups {"
+          }
+        ]
+      },
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/ClangTidyFeatureModule.cpp",
+        "rows": [
+          {
+            "n": 203,
+            "text": "    // If clang-tidy is configured to emit clang warnings, we should too."
+          },
+          {
+            "n": 204,
+            "text": "    //"
+          },
+          {
+            "n": 205,
+            "text": "    // Such clang-tidy configuration consists of two parts:"
+          },
+          {
+            "n": 206,
+            "text": "    //   - ExtraArgs: [\"-Wfoo\"] causes clang to produce the warnings"
+          },
+          {
+            "n": 207,
+            "text": "    //   - Checks: \"clang-diagnostic-foo\" prevents clang-tidy filtering them out"
+          },
+          {
+            "n": 208,
+            "text": "    //"
+          },
+          {
+            "n": 209,
+            "text": "    // In clang-tidy, diagnostics are emitted if they pass both checks."
+          },
+          {
+            "n": 210,
+            "text": "    // When groups contain subgroups, -Wparent includes the child, but"
+          },
+          {
+            "n": 211,
+            "text": "    // clang-diagnostic-parent does not."
+          },
+          {
+            "n": 212,
+            "text": "    //"
+          },
+          {
+            "n": 213,
+            "text": "    // We *don't* want to change the compile command directly. This can have"
+          },
+          {
+            "n": 214,
+            "text": "    // too many unexpected effects: breaking the command, interactions with"
+          },
+          {
+            "n": 215,
+            "text": "    // -- and -Werror, etc. Besides, we've already parsed the command."
+          },
+          {
+            "n": 216,
+            "text": "    // Instead we parse the -W<group> flags and handle them directly."
+          },
+          {
+            "n": 217,
+            "text": "    //"
+          },
+          {
+            "n": 218,
+            "text": "    // Similarly, we don't want to use Checks to filter clang diagnostics after"
+          },
+          {
+            "n": 219,
+            "text": "    // they are generated, as this spreads clang-tidy emulation everywhere."
+          },
+          {
+            "n": 220,
+            "text": "    // Instead, we just use these to filter which extra diagnostics we enable."
+          },
+          {
+            "n": 221,
+            "text": "    TidyDiagnosticGroups EnabledGroups(Options->Checks ? *Options->Checks"
+          },
+          {
+            "n": 222,
+            "text": "                                                       : llvm::StringRef());"
+          }
+        ]
+      },
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/ClangTidyFeatureModule.cpp",
+        "rows": [
+          {
+            "n": 237,
+            "text": "    // Set up ClangTidy. Must happen after BeginSourceFile() so ASTContext"
+          },
+          {
+            "n": 238,
+            "text": "    // exists. Clang-tidy has some limitations to ensure reasonable performance:"
+          },
+          {
+            "n": 239,
+            "text": "    //  - checks don't see all preprocessor events in the preamble"
+          },
+          {
+            "n": 240,
+            "text": "    //  - matchers run only over the main-file top-level decls (and can't see"
+          },
+          {
+            "n": 241,
+            "text": "    //    ancestors outside this scope)."
+          },
+          {
+            "n": 242,
+            "text": "    // In practice almost all checks work well without modifications."
+          },
+          {
+            "n": 243,
+            "text": "    trace::Span Tracer(\"ClangTidyInit\");"
+          },
+          {
+            "n": 244,
+            "text": "    static const auto *AllFactories = [] {"
+          },
+          {
+            "n": 245,
+            "text": "      auto *Factories = new tidy::ClangTidyCheckFactories;"
+          }
+        ]
+      },
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/ClangTidyFeatureModule.cpp",
+        "rows": [
+          {
+            "n": 145,
+            "text": "    if (NeedsWerrorExclusion) {"
+          },
+          {
+            "n": 146,
+            "text": "      // FIXME: there's no API to suppress -Werror for single diagnostics."
+          },
+          {
+            "n": 147,
+            "text": "      // In some cases with sub-groups, we may end up erroneously"
+          },
+          {
+            "n": 148,
+            "text": "      // downgrading diagnostics that were -Werror in the compile command."
+          },
+          {
+            "n": 149,
+            "text": "      Diags.setDiagnosticGroupWarningAsError(Group, false);"
+          }
+        ]
+      },
+      {
+        "rev": "c64f1fca38c610faa448c14c5336808087b1996e",
+        "file": "clang-tools-extra/clangd/ClangTidyFeatureModule.cpp",
+        "rows": [
+          {
+            "n": 356,
+            "text": "    // clang-tidy bakes the name into diagnostic messages. Strip it out."
+          },
+          {
+            "n": 357,
+            "text": "    // It would be much nicer to make clang-tidy not do this."
+          },
+          {
+            "n": 358,
+            "text": "    auto CleanMessage = [&](std::string &Message) {"
+          }
+        ]
+      }
+    ],
+    "kind": "CODE + ORIGINAL COMMENTS",
+    "notes": [
+      "Original comments and FIXMEs move with the code; wording is preserved.",
+      "Only indentation and line wrapping may change. New glue comments are separate."
+    ],
+    "height": 1705
+  }
+]

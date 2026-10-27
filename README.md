@@ -1,297 +1,303 @@
 # Moving clang-tidy into a FeatureModule
 
-A visual walkthrough of squashed commit [`379025b2e426`](https://github.com/ArcsinX/llvm-project/commit/379025b2e426594be031e6007c2cff9d84942079) (`Moved clang-tidy into feature module`), compared with its parent [`239c882df8aa`](https://github.com/ArcsinX/llvm-project/tree/239c882df8aa5e256256843090984ee90b43e835).
+A visual walkthrough of squashed commit [`c64f1fca38c6`](https://github.com/ArcsinX/llvm-project/commit/c64f1fca38c610faa448c14c5336808087b1996e) (`Moved clang-tidy into feature module`), compared with its parent [`101584320859`](https://github.com/ArcsinX/llvm-project/tree/101584320859c12c84929443136e9deb54de544a).
 
-All source links point directly to the squashed commit. [View the complete change on GitHub](https://github.com/ArcsinX/llvm-project/commit/379025b2e426594be031e6007c2cff9d84942079).
+17 changed files: **+624 / −408**. All source links are pinned to these exact snapshots.
 
-The main change is ownership: clang-tidy logic formerly embedded in `ParsedAST.cpp` and `Diagnostics.cpp` is owned by `ClangTidyFeatureModule` and its per-build `TidyASTListener`. The core still controls the frontend lifecycle.
+The main change is ownership: clang-tidy logic formerly embedded in ParsedAST.cpp and Diagnostics.cpp moves into ClangTidyFeatureModule and its per-build TidyASTListener. Core parsing orchestration stays in place.
 
-Original explanatory comments and existing FIXMEs move together with the code. Their wording is retained; indentation and line wrapping may change. New comments explain the added adapters and wiring. [Figure 19](#19-code-moves-together-with-its-original-comments) shows paired examples.
+Original explanatory comments and existing FIXMEs move together with their code. Their wording is retained; indentation and line wrapping may change. New comments explain module ownership and wiring. [See figure 19](#19-code-moves-together-with-its-original-comments).
 
-![Overview of the code migration](assets/00-overview.png)
+Matching remains a direct MatchFinder call: no consumer wrapper, takeover or reinitialization is introduced. The parent already contains four relevant regression tests; this patch adds the provider-swap test and adapts existing setup. No lit test is added.
+
+![Overview](assets/00-overview.png)
 
 ## Reading the diagrams
 
-Amber (−) marks lines removed at the shown location; green (+) marks lines added there; gray marks unchanged context. Colors follow the actual git diff. A deletion/addition pair may be a rewrite or reindentation within the same core file. Arrows map the tidy responsibility described by the figure, not every line in its excerpts.
+Amber (−) marks lines removed at the shown location; green (+) marks added lines; gray marks unchanged context. Colors follow the actual git diff. Arrows map the responsibility described by the figure, not every line in its excerpts.
 
-Each figure pairs **before** and **after** source excerpts with highlighted selections and an arrow. These are source-rendered images, not IDE screenshots. Lines are taken verbatim from the two git snapshots; line numbers are original, and gaps are marked. File paths in the images are relative to `clang-tools-extra/clangd/`.
+These are source-rendered before/after images, not IDE screenshots. Displayed code is verbatim, line numbers are original, and omitted spans are marked. File paths are relative to clang-tools-extra/clangd/ unless they begin with llvm/. Every displayed source line and highlight is audited against Git.
 
-- **Move / adapt:** relocated responsibility, with renaming or lifecycle adjustments.
-- **New glue / ownership:** new code required to connect the module. It is not shown as a literal move.
-- **Rewire / test adapter:** callers change how they supply the feature.
-- **Stays in place:** code that may appear moved in the diff but remains in the core.
+This is not entirely a literal move: provider ownership, filename preservation, generic metadata handling and caller adapters are called out separately.
 
-This is **not** a claim that the entire commit is a byte-for-byte move. In particular, it adds consumer wrappers, provider snapshots and filename normalization; it preserves the old no-check suppression policy, preserves module-provided metadata, and avoids duplicate tags.
+The generic diagnostic callback contract is unchanged. Location-less errors from custom tidy checks still bypass sawDiagnostic, so tidy-specific suppression of those errors is not preserved. Built-in location-less configuration warnings were already filtered out.
 
-The generic diagnostic callback contract is unchanged. Location-less errors from custom tidy checks bypass sawDiagnostic, so their tidy-specific suppression is not preserved. Built-in configuration warnings were already filtered out.
-
-Open [the hosted walkthrough](https://arcsinx.github.io/clang-tidy-feature-module-walkthrough/) for a self-contained, zoomable copy, or [the complete diff](migration.patch) for every changed line. PNGs are used below for Markdown compatibility; each section also links to a scalable SVG.
+[Open the hosted walkthrough](https://arcsinx.github.io/clang-tidy-feature-module-walkthrough/) · [Complete patch](migration.patch) · [Snapshot metadata](snapshot.json)
 
 ## Lifecycle map
 
-| Existing lifecycle point | Module responsibility |
+| Existing hook | Tidy module responsibility |
 | --- | --- |
-| Before `BeginSourceFile()` | Read options and apply compiler warning options |
-| [`beforePPCallbacks()`](https://github.com/ArcsinX/llvm-project/blob/379025b2e426594be031e6007c2cff9d84942079/clang-tools-extra/clangd/FeatureModule.h#L130) | Create context/checks; register callbacks and matchers |
-| [`beforeExecute()`](https://github.com/ArcsinX/llvm-project/blob/379025b2e426594be031e6007c2cff9d84942079/clang-tools-extra/clangd/FeatureModule.h#L135) | Install the multiplexer and deferred tidy consumer |
-| [`afterExecute()`](https://github.com/ArcsinX/llvm-project/blob/379025b2e426594be031e6007c2cff9d84942079/clang-tools-extra/clangd/FeatureModule.h#L140) | Run matching after tokens are collected and traversal is restricted |
-| [`sawDiagnostic()`](https://github.com/ArcsinX/llvm-project/blob/379025b2e426594be031e6007c2cff9d84942079/clang-tools-extra/clangd/FeatureModule.h#L145) | Apply tidy policy; identify tidy diagnostics |
-| [`finalizeDiagnostic()`](https://github.com/ArcsinX/llvm-project/blob/379025b2e426594be031e6007c2cff9d84942079/clang-tools-extra/clangd/FeatureModule.h#L149) | Clean messages and attach tidy-specific tags |
+| `beforeBeginSourceFile()` | Read configuration and apply warning options before frontend initialization |
+| `beforePPCallbacks()` | Create the context/checks and register PP callbacks and matchers |
+| `afterExecute()` | Call Finder.matchAST() directly after tokens and traversal scope are finalized |
+| `sawDiagnostic()` | Apply tidy suppression/severity policy and identify tidy diagnostics |
+| `finalizeDiagnostic()` | Supply fallback metadata, clean messages and attach tidy tags |
 
-`Preamble.cpp` and `FeatureModule.h` are unchanged. The lifecycle hooks are already in the parent. Preamble listeners do not run tidy checks: `beforeBeginSourceFile()` is main-file-only, and the tidy listener skips initialization without those options.
-
+The module no longer overrides beforeExecute(). FeatureModule.h and Preamble.cpp are unchanged. Preamble builds do not run tidy checks, as before.
 
 ## Core code retained by the migration
 
-The following blocks stay in `ParsedAST.cpp`; their line numbers shift because tidy code above them was extracted.
-
 | Retained block | Before | After |
 | --- | --- | --- |
-| Frontend startup and beforeBeginSourceFile dispatch | [L546](https://github.com/ArcsinX/llvm-project/blob/239c882df8aa5e256256843090984ee90b43e835/clang-tools-extra/clangd/ParsedAST.cpp#L546) | [L371](https://github.com/ArcsinX/llvm-project/blob/379025b2e426594be031e6007c2cff9d84942079/clang-tools-extra/clangd/ParsedAST.cpp#L371) |
-| beforeExecute dispatch and Execute() | [L756](https://github.com/ArcsinX/llvm-project/blob/239c882df8aa5e256256843090984ee90b43e835/clang-tools-extra/clangd/ParsedAST.cpp#L756) | [L490](https://github.com/ArcsinX/llvm-project/blob/379025b2e426594be031e6007c2cff9d84942079/clang-tools-extra/clangd/ParsedAST.cpp#L490) |
-| Token finalization and traversal restriction | [L770](https://github.com/ArcsinX/llvm-project/blob/239c882df8aa5e256256843090984ee90b43e835/clang-tools-extra/clangd/ParsedAST.cpp#L770) | [L504](https://github.com/ArcsinX/llvm-project/blob/379025b2e426594be031e6007c2cff9d84942079/clang-tools-extra/clangd/ParsedAST.cpp#L504) |
-| afterExecute dispatch | [L785](https://github.com/ArcsinX/llvm-project/blob/239c882df8aa5e256256843090984ee90b43e835/clang-tools-extra/clangd/ParsedAST.cpp#L785) | [L513](https://github.com/ArcsinX/llvm-project/blob/379025b2e426594be031e6007c2cff9d84942079/clang-tools-extra/clangd/ParsedAST.cpp#L513) |
-
-Only the tidy configuration, check setup, matching and diagnostic policy are extracted. Existing lifecycle dispatch, token collection and generic module forwarding remain in core code.
+| Frontend startup and beforeBeginSourceFile dispatch | [L546](https://github.com/ArcsinX/llvm-project/blob/101584320859c12c84929443136e9deb54de544a/clang-tools-extra/clangd/ParsedAST.cpp#L546) | [L371](https://github.com/ArcsinX/llvm-project/blob/c64f1fca38c610faa448c14c5336808087b1996e/clang-tools-extra/clangd/ParsedAST.cpp#L371) |
+| beforeExecute dispatch | [L760](https://github.com/ArcsinX/llvm-project/blob/101584320859c12c84929443136e9deb54de544a/clang-tools-extra/clangd/ParsedAST.cpp#L760) | [L494](https://github.com/ArcsinX/llvm-project/blob/c64f1fca38c610faa448c14c5336808087b1996e/clang-tools-extra/clangd/ParsedAST.cpp#L494) |
+| Token finalization and traversal restriction | [L770](https://github.com/ArcsinX/llvm-project/blob/101584320859c12c84929443136e9deb54de544a/clang-tools-extra/clangd/ParsedAST.cpp#L770) | [L504](https://github.com/ArcsinX/llvm-project/blob/c64f1fca38c610faa448c14c5336808087b1996e/clang-tools-extra/clangd/ParsedAST.cpp#L504) |
+| afterExecute dispatch | [L786](https://github.com/ArcsinX/llvm-project/blob/101584320859c12c84929443136e9deb54de544a/clang-tools-extra/clangd/ParsedAST.cpp#L786) | [L514](https://github.com/ArcsinX/llvm-project/blob/c64f1fca38c610faa448c14c5336808087b1996e/clang-tools-extra/clangd/ParsedAST.cpp#L514) |
 
 ## Detailed before / after views
 
 ### 1. Configuration and compiler warning options
 
-**MOVE + ADAPT.** Only tidy options and warning handling move into the listener; frontend startup stays in ParsedAST.
+**MOVE + ADAPT.** Only tidy options and warning handling move into the listener; frontend startup stays in ParsedAST. Action, MainInput, BeginSourceFile and the beforeBeginSourceFile hook loop remain unchanged. Use clangd's remapped main-file spelling; normalize only a relative fallback before configuration lookup.
 
-![Configuration and compiler warning options — before and after](assets/01-options.png)
+![Configuration and compiler warning options](assets/01-options.png)
 
 [Scalable image](assets/01-options.svg)
 
-- Action, MainInput, BeginSourceFile and the beforeBeginSourceFile hook loop remain unchanged.
-- New adaptation: preserve the requested filename from the remapped main-file buffer; normalize only relative fallback paths.
+- Frontend startup and beforeBeginSourceFile dispatch remain in ParsedAST.
+- The remapped main-file buffer preserves the requested filename for configuration lookup.
+- Only configuration lookup and warning handling move. Action, MainInput, BeginSourceFile and lifecycle dispatch remain core responsibilities.
 
 ### 2. Tidy-specific helpers and linker dependencies
 
-**MOVE + CLEANUP.** The warning-group parser, warning mapper, fast-check filter and force-linker leave ParsedAST.cpp and live with the module.
+**MOVE + CLEANUP.** The warning-group parser, warning mapper, fast-check filter and force-linker leave ParsedAST.cpp and live with the module. Selected excerpts represent the helper bodies; the full diff includes every moved line. filterFastTidyChecks becomes filterFastChecks; original helper comments and FIXMEs move with the code.
 
-![Tidy-specific helpers and linker dependencies — before and after](assets/02-helpers.png)
+![Tidy-specific helpers and linker dependencies](assets/02-helpers.png)
 
 [Scalable image](assets/02-helpers.svg)
 
-- Selected excerpts represent the helper bodies; the full diff includes every moved line.
-- filterFastTidyChecks becomes filterFastChecks; original helper comments and FIXMEs move with the code.
+- The warning-group parser, warning mapper, fast-check filter and force-linker leave ParsedAST.cpp and live with the module. Selected excerpts represent the helper bodies; the full diff includes every moved line. filterFastTidyChecks becomes filterFastChecks; original helper comments and FIXMEs move with the code.
+- Selected excerpts show the helper responsibilities; migration.patch contains every moved line. filterFastTidyChecks is renamed filterFastChecks.
 
 ### 3. Per-build state and ClangTidyContext
 
-**MOVE + OWNERSHIP.** Stack-local tidy state in ParsedAST::build becomes the state of one TidyASTListener per main-file build.
+**MOVE + OWNERSHIP.** Stack-local tidy state becomes per-build listener state. Context outlives its checks and MatchFinder; matching is invoked directly after parsing.
 
-![Per-build state and ClangTidyContext — before and after](assets/03-context.png)
+![Per-build state and ClangTidyContext](assets/03-context.png)
 
 [Scalable image](assets/03-context.svg)
 
-- Context, checks and finder retain their roles; member order ensures the context outlives the checks and finder.
-- The options are moved into the context. Preamble listeners remain inactive.
+- Options move into ClangTidyContext; member order preserves dependent lifetimes.
+- Preamble listeners remain inactive. No deferred-consumer state is introduced.
+- Context, checks and finder keep their original roles. Their member declaration order ensures dependent state is destroyed first.
 
 ### 4. Factories, custom checks and callback registration
 
-**MOVE + ADAPT.** Check setup moves into beforePPCallbacks(), after BeginSourceFile and before clangd captures callbacks for preamble replay.
+**MOVE + ADAPT.** Check setup moves into beforePPCallbacks(), after BeginSourceFile and before clangd captures callbacks for preamble replay. The registry here is ClangTidyModuleRegistry (check factories), not FeatureModuleRegistry. Custom-check registration, its mutex, fast-check filtering and PP/matcher registration are retained.
 
-![Factories, custom checks and callback registration — before and after](assets/04-checks.png)
+![Factories, custom checks and callback registration](assets/04-checks.png)
 
 [Scalable image](assets/04-checks.svg)
 
-- The registry here is ClangTidyModuleRegistry (check factories), not FeatureModuleRegistry.
-- Custom-check registration, its mutex, fast-check filtering and PP/matcher registration are retained.
+- Check factories still come from ClangTidyModuleRegistry, not FeatureModuleRegistry.
+- Custom-check registration, synchronization, fast filtering and callback registration are retained.
+- The registry shown here is ClangTidyModuleRegistry for check factories, not FeatureModuleRegistry.
 
-### 5. AST matching still runs after token collection
+### 5. AST matching is a direct afterExecute call
 
-**MOVE + ADAPTER.** Direct tidy matching moves to the listener; the existing afterExecute dispatch reaches its deferred consumer.
+**MOVE + ADAPT.** The same MatchFinder call moves from ParsedAST into afterExecute(). Tokens are collected and traversal scope is restricted first, as before.
 
-![AST matching still runs after token collection — before and after](assets/05-match.png)
+![AST matching is a direct afterExecute call](assets/05-match.png)
 
 [Scalable image](assets/05-match.svg)
 
-- Token finalization, traversal restriction and the afterExecute hook loop remain unchanged in ParsedAST.
-- HandleTranslationUnit records the AST first; run() executes the delegate only after those steps.
+- Token finalization, traversal restriction and hook dispatch stay in ParsedAST.
+- There is no deferred consumer, consumer replacement, or reinitialization.
+- afterExecute runs after token collection and traversal restriction, before PP.EndSourceFile(). This preserves the original matching order.
 
-### 6. MultiplexConsumer is new lifecycle glue
+### 6. Existing hooks; no consumer replacement
 
-**NEW GLUE.** The new tidy listener uses the existing beforeExecute hook to add the original and deferred tidy consumers.
+**EXISTING INTERFACE.** The listener implements the existing FeatureModule interface. Matching runs directly in afterExecute; no new AST-consumer adapter is needed.
 
-![MultiplexConsumer is new lifecycle glue — before and after](assets/06-multiplex.png)
+![Existing hooks; no consumer replacement](assets/06-multiplex.png)
 
 [Scalable image](assets/06-multiplex.svg)
 
-- The beforeExecute hook loop and Execute() stay unchanged; the listener adds the consumer wrapper.
-- The specialized multiplexer initializes only the new tidy child; matching itself remains deferred.
+- FeatureModule.h is unchanged; its lifecycle hooks are already in the parent.
+- The tidy module neither takes nor replaces the existing ASTConsumer.
+- The historical figure anchor is retained, but consumer multiplexing has been removed from the implementation.
 
 ### 7. Diagnostic suppression and severity policy
 
-**MOVE + BEHAVIOR DETAIL.** The tidy-specific part of ParsedAST's level adjuster moves to sawDiagnostic(). It edits the assembled diagnostic's severity.
+**MOVE + POLICY PRESERVED.** The tidy-specific level adjuster moves to sawDiagnostic(), which edits the assembled diagnostic. Retains clangd suppression, NOLINT, system-macro filtering and warnings-as-errors. The nonempty-check guard is preserved: without active checks, tidy suppression and promotion remain disabled.
 
-![Diagnostic suppression and severity policy — before and after](assets/07-filtering.png)
+![Diagnostic suppression and severity policy](assets/07-filtering.png)
 
 [Scalable image](assets/07-filtering.svg)
 
-- Retains clangd suppression, NOLINT, system-macro filtering and warnings-as-errors.
-- The nonempty-check guard is preserved: without active checks, tidy suppression and promotion remain disabled.
+- Suppression, NOLINT, system-macro policy and warnings-as-errors retain their previous guard.
+- With no active tidy checks, compiler-warning suppression and promotion remain unchanged.
+- The nonempty-check guard preserves the pre-migration policy; changing it to a context-only guard would change compiler-warning behavior.
 
 ### 8. Diagnostic names and source move out of StoreDiags
 
-**MOVE + GENERIC FALLBACK.** The listener identifies tidy diagnostics; StoreDiags no longer receives a ClangTidyContext and preserves supplied metadata.
+**MOVE + GENERIC FALLBACK.** The listener identifies tidy diagnostics; StoreDiags no longer receives a ClangTidyContext and preserves supplied metadata. Compiler diagnostics retain their Clang source and -W name. Flushing, compiler metadata fallback, generic finalizer dispatch and deduplication stay in StoreDiags.
 
-![Diagnostic names and source move out of StoreDiags — before and after](assets/08-metadata.png)
+![Diagnostic names and source move out of StoreDiags](assets/08-metadata.png)
 
 [Scalable image](assets/08-metadata.svg)
 
-- Compiler diagnostics retain their Clang source and -W name.
-- Flushing, compiler metadata fallback, generic finalizer dispatch and deduplication stay in StoreDiags.
+- StoreDiags keeps compiler metadata fallback and generic finalizer dispatch.
+- The generic callback contract for location-less diagnostics is unchanged.
+- StoreDiags::take() no longer needs a tidy context. Flushing, compiler metadata fallback, generic finalizers and deduplication remain in core code.
 
 ### 9. Message cleanup and tidy-specific tags
 
-**MOVE + SMALL GUARD.** Check-name suffix removal and tidy tag assignment move into finalizeDiagnostic(), once notes and fixes are available.
+**MOVE + SMALL GUARD.** Message cleanup and tidy tags move into finalizeDiagnostic(), after notes and fixes are assembled. Constructor errors get tidy metadata here because they precede check initialization. Cleanup still covers messages, notes and fixes; containment checks avoid duplicate tags.
 
-![Message cleanup and tidy-specific tags — before and after](assets/09-finalize.png)
+![Message cleanup and tidy-specific tags](assets/09-finalize.png)
 
 [Scalable image](assets/09-finalize.svg)
 
-- The same cleanup is applied to the diagnostic, its notes and its fixes. Constructor errors get tidy metadata here because they precede check initialization.
-- Added containment checks prevent adding a tag that another module already supplied.
+- Message cleanup covers the diagnostic, its notes and fixes.
+- Fallback names handle constructor diagnostics; containment checks avoid duplicate tags.
+- Existing cleanup comments and FIXMEs move with the corresponding logic.
 
 ### 10. Application wiring replaces the provider plumbing
 
-**REWIRE.** ClangdMain explicitly creates the tidy module; server and ParseInputs use the existing generic FeatureModules pointer.
+**APPLICATION WIRING.** ClangdMain explicitly creates the tidy module only when EnableClangTidy is true. Server and ParseInputs retain their existing generic FeatureModules forwarding.
 
-![Application wiring replaces the provider plumbing — before and after](assets/10-wiring.png)
+![Application wiring replaces the provider plumbing](assets/10-wiring.png)
 
 [Scalable image](assets/10-wiring.svg)
 
-- Generic module-set setup already exists in main; only tidy-module construction is added.
-- FeatureModules fields and server forwarding already existed; dedicated tidy-provider plumbing changes.
+- Module-set construction and generic forwarding already existed.
+- Check mode no longer forces the tidy module to load when clang-tidy is disabled.
+- --check alone does not force the module to load. Combining --clang-tidy=0 with --check-tidy-time is no longer supported.
 
 ### 11. Module-owned provider snapshots
 
-**NEW OWNERSHIP.** A module owns the options provider. Each listener captures a shared snapshot, allowing later provider replacement.
+**NEW OWNERSHIP.** A module owns the options provider. Each listener captures a shared snapshot, allowing later provider replacement. An empty provider disables new listeners. Existing listeners keep their captured provider. This ownership and synchronization code is new, not relocated from ParsedAST.
 
-![Module-owned provider snapshots — before and after](assets/11-provider.png)
+![Module-owned provider snapshots](assets/11-provider.png)
 
 [Scalable image](assets/11-provider.svg)
 
-- An empty provider disables new listeners. Existing listeners keep their captured provider.
-- This ownership and synchronization code is new, not relocated from ParsedAST.
+- A module owns the options provider. Each listener captures a shared snapshot, allowing later provider replacement. An empty provider disables new listeners. Existing listeners keep their captured provider. This ownership and synchronization code is new, not relocated from ParsedAST.
+- A private construction helper and public snapshot swap support temporary overrides; no default registry construction is introduced.
 
 ### 12. Check-mode timing swaps only tidy's provider
 
-**REWIRE + NEW GUARD.** Benchmark runs replace the tidy provider temporarily, leaving the other feature modules in the build.
+**TIMING ADAPTER.** Timing temporarily swaps only tidy's provider, leaving other modules active. Clang-tidy must be enabled; a missing module produces an error.
 
-![Check-mode timing swaps only tidy's provider — before and after](assets/12-benchmark.png)
+![Check-mode timing swaps only tidy's provider](assets/12-benchmark.png)
 
 [Scalable image](assets/12-benchmark.svg)
 
-- ClangdMain supplies the module for check mode; timing does not insert modules into a caller-owned set.
-- RAII restores the provider after each timed build. Other modules are not replaced by a tidy-only set.
+- Provider allocation and both swaps are outside the measured Time() block.
+- The local variable saves the original provider; scope exit restores it.
+- The missing-module guard reports an error instead of inserting a module into a caller-owned set. Ordinary timing still works with clang-tidy enabled.
 
 ### 13. TestTU keeps the short test configuration
 
-**TEST ADAPTER.** Tests may still assign TU.ClangTidyProvider. build() wraps it in a local module; inputs() only forwards explicit modules.
+**TEST HELPER ADAPTER.** Tests may still assign TU.ClangTidyProvider. build() wraps it in a local module; inputs() only forwards explicit modules. ClangTidyProvider and FeatureModules are mutually exclusive in TestTU::build(). Mixed-module tests and direct inputs() callers use an explicit module set. This is a deliberate test-helper boundary.
 
-![TestTU keeps the short test configuration — before and after](assets/13-testtu.png)
+![TestTU keeps the short test configuration](assets/13-testtu.png)
 
 [Scalable image](assets/13-testtu.svg)
 
-- ClangTidyProvider and FeatureModules are mutually exclusive in TestTU::build().
-- Mixed-module tests and direct inputs() callers use an explicit module set. This is a deliberate test-helper boundary.
-- TestTU.h is unchanged; only the build adapter in TestTU.cpp changes.
+- TU.ClangTidyProvider is a build()-only convenience adapter.
+- Mixed modules and direct inputs() calls use an explicit set; TestTU.h is unchanged.
+- The convenience fields ClangTidyProvider and FeatureModules remain mutually exclusive in TestTU::build(). Direct inputs() calls must supply modules explicitly.
 
 ### 14. Server and LSP tests register a feature module
 
-**TEST ADAPTER.** Tests embedding the server replace the removed options field with an explicitly constructed tidy module.
+**TEST SETUP ADAPTERS.** Tests embedding the server replace the removed options field with an explicitly constructed tidy module. The existing test inputs and assertions are retained; only setup changes. The LSP fixture already supplies its FeatureModuleSet to the server.
 
-![Server and LSP tests register a feature module — before and after](assets/14-server-tests.png)
+![Server and LSP tests register a feature module](assets/14-server-tests.png)
 
 [Scalable image](assets/14-server-tests.svg)
 
-- The existing test inputs and assertions are retained; only setup changes.
-- The LSP fixture already supplies its FeatureModuleSet to the server.
+- Tests embedding the server replace the removed options field with an explicitly constructed tidy module. The existing test inputs and assertions are retained; only setup changes. The LSP fixture already supplies its FeatureModuleSet to the server.
+- Existing test code and assertions are retained; setup changes to the new configuration mechanism.
 
 ### 15. IncludeFixer and orchestration stay in the core
 
-**STAYS IN PLACE.** IncludeFixer stays in ParsedAST; colored lines show reindentation and rewrites within that same file.
+**STAYS IN CORE.** IncludeFixer stays in ParsedAST; colors show reindentation and rewrites within the same core file. Clang's typo-correction adjustment, include fixes, token collection and lifecycle dispatch remain in the core. Preamble.cpp and FeatureModule.h are unchanged; the existing lifecycle hooks are reused.
 
-![IncludeFixer and orchestration stay in the core — before and after](assets/15-stays.png)
+![IncludeFixer and orchestration stay in the core](assets/15-stays.png)
 
 [Scalable image](assets/15-stays.svg)
 
-- Clang's typo-correction severity adjustment and include fixes remain in ParsedAST.
-- Preamble.cpp and FeatureModule.h are unchanged; the existing lifecycle hooks are reused.
+- IncludeFixer and typo-correction severity handling remain in the core.
+- Frontend execution, token collection, traversal restriction and lifecycle dispatch remain in place.
+- FeatureModule.h, Preamble.cpp and TestTU.h are unchanged by this commit. Colored IncludeFixer lines represent same-file reindentation/rewiring, not extraction.
 
-### 16. Build integration and focused regression additions
+### 16. Existing regressions are reused, not re-added
 
-**NEW SUPPORT.** CMake and GN compile the module. Five unit regressions and one lit test protect the migration.
+**TEST SETUP ADAPTERS.** The parent already contains the zero-check, warning-option, relative-input and consumer-initialization tests. The migration adapts their setup.
 
-![Build integration and focused regression additions — before and after](assets/16-build-tests.png)
+![Existing regressions are reused, not re-added](assets/16-build-tests.png)
 
 [Scalable image](assets/16-build-tests.svg)
 
-- Existing tidy diagnostics, token-buffer and preamble replay tests are reused rather than duplicated.
-- The relative-input and provider-swap tests are shown in full in figure 17.
+- Gray code is baseline coverage, not tests added by this migration.
+- Direct inputs() tests construct an explicit module; build() retains its short provider adapter.
+- All four baseline regressions were added before the migration. They are not new functionality or newly introduced tests in this patch.
 
-### 17. Relative inputs and temporary provider overrides
+### 17. Filename identity and temporary provider overrides
 
-**NEW TESTS.** Two module-specific regression tests cover filename resolution at the new listener boundary and temporary provider restoration.
+**ADAPT + ONE NEW TEST.** Relative-input coverage already exists in the parent; its provider is wired through a module. The provider-swap regression is new.
 
-![Relative inputs and temporary provider overrides — new regression tests](assets/17-paths-provider.png)
+![Filename identity and temporary provider overrides](assets/17-paths-provider.png)
 
 [Scalable image](assets/17-paths-provider.svg)
 
-- ClangTidyRelativeInput supplies relative and differing frontend inputs, verifies that the provider receives clangd's original requested filename, and runs the check selected by that file's `.clang-tidy`.
-- ClangTidyTemporaryProvider disables checks through swapProvider(), then swaps back and verifies that the original modernize-use-nullptr diagnostic returns.
+- Lookup uses the requested document identity even when the frontend input name differs.
+- The new swap test disables checks, restores the provider, and checks the original diagnostic.
+- The differing frontend input is an artificial low-level test. Normal CommandMangler handling already aligns the input with the requested document.
 
-### 18. GN build and check-mode timing
+### 18. CMake and GN compile the new module
 
-**NEW SUPPORT.** GN lists the module source; the lit test verifies timing with ordinary tidy checking disabled.
+**BUILD WIRING.** Both build descriptions add the same ClangTidyFeatureModule.cpp source. No lit test is introduced by this commit.
 
-![GN build and check-mode timing](assets/18-diagnostic-build.png)
+![CMake and GN compile the new module](assets/18-diagnostic-build.png)
 
 [Scalable image](assets/18-diagnostic-build.svg)
 
-- The existing FeatureModule interface and location-less diagnostic callback behavior are unchanged.
+- The removed check-tidy-time lit test is not part of the migration.
+- Timing with ordinary clang-tidy disabled is no longer preserved.
+- There is no check-tidy-time.test in either selected snapshot.
 
 ### 19. Code moves together with its original comments
 
-**CODE + COMMENTS.** Original explanatory comments and existing FIXMEs move together with the code. Their wording is retained; indentation and line wrapping may change. New comments explain the added adapters and wiring.
+**CODE + ORIGINAL COMMENTS.** Original explanatory comments and existing FIXMEs move with their code. Comment wording is preserved, allowing indentation and line wrapping changes. New adapter comments are separate.
 
-![Code and its original comments — before and after](assets/19-comments.png)
+![Code moves together with its original comments](assets/19-comments.png)
 
 [Scalable image](assets/19-comments.svg)
 
-The pairs show helper documentation, the warning-options rationale, existing limitations, a FIXME, and diagnostic cleanup. Their comment wording matches after ignoring whitespace and line wrapping.
+- Original comments and FIXMEs move with the code; wording is preserved.
+- Only indentation and line wrapping may change. New glue comments are separate.
+- Five paired examples show helper documentation, warning-option rationale, existing limitations, a FIXME and diagnostic cleanup. Their wording matches after ignoring whitespace and line wrapping.
 
 ## Coverage of all changed files
 
-The figures group related changes; they are not a screenshot of every diff hunk. All 18 changed files are accounted for below. Include cleanup, comment edits, and full function bodies are available in [migration.patch](migration.patch).
+All 17 changed files are accounted for below. The figures group related responsibilities rather than showing every diff hunk. The complete patch is included in [migration.patch](migration.patch).
 
 | File (under clang-tools-extra/clangd/) | Change | Figure(s) |
 | --- | --- | --- |
-| [`CMakeLists.txt`](https://github.com/ArcsinX/llvm-project/blob/379025b2e426594be031e6007c2cff9d84942079/clang-tools-extra/clangd/CMakeLists.txt) | Compile the new module | 16 |
-| [`ClangTidyFeatureModule.cpp`](https://github.com/ArcsinX/llvm-project/blob/379025b2e426594be031e6007c2cff9d84942079/clang-tools-extra/clangd/ClangTidyFeatureModule.cpp) | Relocated helpers/check lifecycle/diagnostic policy, plus adapters and provider snapshots | 1–12 |
-| [`ClangTidyFeatureModule.h`](https://github.com/ArcsinX/llvm-project/blob/379025b2e426594be031e6007c2cff9d84942079/clang-tools-extra/clangd/ClangTidyFeatureModule.h) | New explicit module API and provider ownership | 11 |
-| [`ClangdServer.cpp`](https://github.com/ArcsinX/llvm-project/blob/379025b2e426594be031e6007c2cff9d84942079/clang-tools-extra/clangd/ClangdServer.cpp) | Remove dedicated provider forwarding; retain generic module forwarding | 10 |
-| [`ClangdServer.h`](https://github.com/ArcsinX/llvm-project/blob/379025b2e426594be031e6007c2cff9d84942079/clang-tools-extra/clangd/ClangdServer.h) | Remove provider fields from options and server state | 10–11 |
-| [`Compiler.h`](https://github.com/ArcsinX/llvm-project/blob/379025b2e426594be031e6007c2cff9d84942079/clang-tools-extra/clangd/Compiler.h) | Remove tidy-specific ParseInputs field/include | 10–11 |
-| [`Diagnostics.cpp`](https://github.com/ArcsinX/llvm-project/blob/379025b2e426594be031e6007c2cff9d84942079/clang-tools-extra/clangd/Diagnostics.cpp) | Move tidy metadata/cleanup/tags; preserve module metadata | 8–9 |
-| [`Diagnostics.h`](https://github.com/ArcsinX/llvm-project/blob/379025b2e426594be031e6007c2cff9d84942079/clang-tools-extra/clangd/Diagnostics.h) | Remove ClangTidyContext dependency from take() | 8 |
-| [`ParsedAST.cpp`](https://github.com/ArcsinX/llvm-project/blob/379025b2e426594be031e6007c2cff9d84942079/clang-tools-extra/clangd/ParsedAST.cpp) | Extract tidy logic; keep frontend orchestration and IncludeFixer | 1–7, 15 |
-| [`tool/Check.cpp`](https://github.com/ArcsinX/llvm-project/blob/379025b2e426594be031e6007c2cff9d84942079/clang-tools-extra/clangd/tool/Check.cpp) | Forward modules and swap the tidy provider during timing | 10, 12 |
-| [`tool/ClangdMain.cpp`](https://github.com/ArcsinX/llvm-project/blob/379025b2e426594be031e6007c2cff9d84942079/clang-tools-extra/clangd/tool/ClangdMain.cpp) | Create the explicit tidy module before check/LSP dispatch | 10 |
-| [`unittests/ClangdLSPServerTests.cpp`](https://github.com/ArcsinX/llvm-project/blob/379025b2e426594be031e6007c2cff9d84942079/clang-tools-extra/clangd/unittests/ClangdLSPServerTests.cpp) | Two LSP tests add the tidy module to the fixture's set | 14 |
-| [`unittests/ClangdTests.cpp`](https://github.com/ArcsinX/llvm-project/blob/379025b2e426594be031e6007c2cff9d84942079/clang-tools-extra/clangd/unittests/ClangdTests.cpp) | Server test installs a tidy module | 14 |
-| [`unittests/DiagnosticsTests.cpp`](https://github.com/ArcsinX/llvm-project/blob/379025b2e426594be031e6007c2cff9d84942079/clang-tools-extra/clangd/unittests/DiagnosticsTests.cpp) | Preserve zero-check warning semantics | 16 |
-| [`unittests/FeatureModulesTests.cpp`](https://github.com/ArcsinX/llvm-project/blob/379025b2e426594be031e6007c2cff9d84942079/clang-tools-extra/clangd/unittests/FeatureModulesTests.cpp) | Add warning-timing, consumer-initialization, relative-input and provider-swap regressions | 16–17 |
-| [`unittests/TestTU.cpp`](https://github.com/ArcsinX/llvm-project/blob/379025b2e426594be031e6007c2cff9d84942079/clang-tools-extra/clangd/unittests/TestTU.cpp) | Build-only local tidy module; direct inputs use explicit modules | 13 |
-
-| [`test/check-tidy-time.test`](https://github.com/ArcsinX/llvm-project/blob/379025b2e426594be031e6007c2cff9d84942079/clang-tools-extra/clangd/test/check-tidy-time.test) | Verify --check-tidy-time with ordinary tidy checking disabled | 18 |
-| [`llvm/utils/gn/secondary/clang-tools-extra/clangd/BUILD.gn`](https://github.com/ArcsinX/llvm-project/blob/379025b2e426594be031e6007c2cff9d84942079/llvm/utils/gn/secondary/clang-tools-extra/clangd/BUILD.gn) | Compile the new module in GN | 18 |
-
-Paths beginning with `llvm/` are repository-root-relative. Other file paths are relative to `clang-tools-extra/clangd/`.
+| [`CMakeLists.txt`](https://github.com/ArcsinX/llvm-project/blob/c64f1fca38c610faa448c14c5336808087b1996e/clang-tools-extra/clangd/CMakeLists.txt) | Compile the module source | 18 |
+| [`ClangTidyFeatureModule.cpp`](https://github.com/ArcsinX/llvm-project/blob/c64f1fca38c610faa448c14c5336808087b1996e/clang-tools-extra/clangd/ClangTidyFeatureModule.cpp) | Move tidy options, checks, direct matching, diagnostic policy and original comments; add provider ownership | 1–12 |
+| [`ClangTidyFeatureModule.h`](https://github.com/ArcsinX/llvm-project/blob/c64f1fca38c610faa448c14c5336808087b1996e/clang-tools-extra/clangd/ClangTidyFeatureModule.h) | Explicit module API and provider snapshots | 11 |
+| [`ClangdServer.cpp`](https://github.com/ArcsinX/llvm-project/blob/c64f1fca38c610faa448c14c5336808087b1996e/clang-tools-extra/clangd/ClangdServer.cpp) | Remove tidy-provider forwarding; retain generic module forwarding | 10 |
+| [`ClangdServer.h`](https://github.com/ArcsinX/llvm-project/blob/c64f1fca38c610faa448c14c5336808087b1996e/clang-tools-extra/clangd/ClangdServer.h) | Remove dedicated tidy-provider fields | 10–11 |
+| [`Compiler.h`](https://github.com/ArcsinX/llvm-project/blob/c64f1fca38c610faa448c14c5336808087b1996e/clang-tools-extra/clangd/Compiler.h) | Remove the tidy-specific ParseInputs field/include | 10–11 |
+| [`Diagnostics.cpp`](https://github.com/ArcsinX/llvm-project/blob/c64f1fca38c610faa448c14c5336808087b1996e/clang-tools-extra/clangd/Diagnostics.cpp) | Move tidy metadata, cleanup and tags; retain generic diagnostics handling | 8–9 |
+| [`Diagnostics.h`](https://github.com/ArcsinX/llvm-project/blob/c64f1fca38c610faa448c14c5336808087b1996e/clang-tools-extra/clangd/Diagnostics.h) | Remove the ClangTidyContext parameter from take() | 8 |
+| [`ParsedAST.cpp`](https://github.com/ArcsinX/llvm-project/blob/c64f1fca38c610faa448c14c5336808087b1996e/clang-tools-extra/clangd/ParsedAST.cpp) | Extract tidy logic; retain frontend orchestration and IncludeFixer | 1–7, 15 |
+| [`tool/Check.cpp`](https://github.com/ArcsinX/llvm-project/blob/c64f1fca38c610faa448c14c5336808087b1996e/clang-tools-extra/clangd/tool/Check.cpp) | Forward the module set and temporarily swap the tidy provider for timing | 10, 12 |
+| [`tool/ClangdMain.cpp`](https://github.com/ArcsinX/llvm-project/blob/c64f1fca38c610faa448c14c5336808087b1996e/clang-tools-extra/clangd/tool/ClangdMain.cpp) | Construct the tidy module only when clang-tidy is enabled | 10 |
+| [`unittests/ClangdLSPServerTests.cpp`](https://github.com/ArcsinX/llvm-project/blob/c64f1fca38c610faa448c14c5336808087b1996e/clang-tools-extra/clangd/unittests/ClangdLSPServerTests.cpp) | Adapt two LSP tests to explicitly add the tidy module | 14 |
+| [`unittests/ClangdTests.cpp`](https://github.com/ArcsinX/llvm-project/blob/c64f1fca38c610faa448c14c5336808087b1996e/clang-tools-extra/clangd/unittests/ClangdTests.cpp) | Adapt server-test setup to explicitly add the tidy module | 14 |
+| [`unittests/DiagnosticsTests.cpp`](https://github.com/ArcsinX/llvm-project/blob/c64f1fca38c610faa448c14c5336808087b1996e/clang-tools-extra/clangd/unittests/DiagnosticsTests.cpp) | Adapt existing warning-option and filename tests; zero-check coverage already exists | 16–17 |
+| [`unittests/FeatureModulesTests.cpp`](https://github.com/ArcsinX/llvm-project/blob/c64f1fca38c610faa448c14c5336808087b1996e/clang-tools-extra/clangd/unittests/FeatureModulesTests.cpp) | Add provider-swap coverage and adapt existing consumer-test setup | 17 |
+| [`unittests/TestTU.cpp`](https://github.com/ArcsinX/llvm-project/blob/c64f1fca38c610faa448c14c5336808087b1996e/clang-tools-extra/clangd/unittests/TestTU.cpp) | Retain the build-only provider convenience adapter | 13 |
+| [`llvm/utils/gn/secondary/clang-tools-extra/clangd/BUILD.gn`](https://github.com/ArcsinX/llvm-project/blob/c64f1fca38c610faa448c14c5336808087b1996e/llvm/utils/gn/secondary/clang-tools-extra/clangd/BUILD.gn) | Compile the module source in GN | 18 |
 
 ## Sharing
 
-Share this folder (or its ZIP) intact: `README.md` refers to `assets/*.png`. The [published site](https://arcsinx.github.io/clang-tidy-feature-module-walkthrough/) embeds the vector diagrams and links to exact source versions on GitHub. You can also download `index.html` for a standalone copy or the ZIP for the original Markdown and images.
+[Published walkthrough](https://arcsinx.github.io/clang-tidy-feature-module-walkthrough/) · [Download ZIP](clang-tidy-migration.zip). Share the README and assets folder together. index.html embeds all vector diagrams and the complete patch, so it can also be shared as a standalone file.
+
+The source-map.json file records all 1004 displayed lines. The five paired comment examples preserve wording after ignoring indentation and wrapping.

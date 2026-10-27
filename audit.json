@@ -1,0 +1,11 @@
+{
+  "commit": "c64f1fca38c610faa448c14c5336808087b1996e",
+  "before": "101584320859c12c84929443136e9deb54de544a",
+  "diagrams": 20,
+  "displayedSourceLines": 1004,
+  "sourceMismatches": 0,
+  "highlightMismatches": 0,
+  "sourceAnchors": 68,
+  "exactPatch": true,
+  "commentPairs": 5
+}
